@@ -1,7 +1,8 @@
+## ML specific utilities
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from copy import deepcopy
 
 from util.class_def.ml_obj_classes import *
 
@@ -12,9 +13,30 @@ from sklearn.metrics import confusion_matrix, fbeta_score, roc_auc_score, classi
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 
 def preprocess_data(fitted_preprocessor, data):
+	'''
+	Utility fxn to preprocess data using a preprocessor from sklearn.preprocessing and return a pandas df
+	Input: 
+		fitted_preprocessor - A preprocessor class from sklearn.preprocessing that has been fit using .fit() method
+		data - Data to transform using preprocessor
+	Return: pd df with transformed values. indices and columns will match data
+	'''
 	return pd.DataFrame(fitted_preprocessor.transform(data), index = data.index, columns = data.columns)
 
-def get_best_CV_score(cv_true_labels, cv_predictions, l1_ratios, beta = 1.5, to_plot = True):
+def get_best_CV_score(cv_true_labels, cv_predictions, l1_ratios = None, beta = 1.5, to_plot = True):
+	'''
+	Called in LR_train_w_CV_controlled
+	Utility fxn to obtain best cross-validation score and corresponding indices using sklearn metric, fbeta_score
+	Prints best fbeta score
+	Input: 
+		cv_true_labels - Array-like, ground truth values
+		cv_predictions - Array-like, estimated target returned by classifier
+		l1_ratios - Optional, Array-like, list of l1-ratios tried. Required for plotting
+		beta - beta for fbeta_score. Default = 1.5, See sklearn for details - https://scikit-learn.org/stable/modules/generated/sklearn.metrics.fbeta_score.html
+		to_plot - bool, whether to plot CV scores for all inverse regularization strengths and l1-ratios attempted
+	Return: Tuple
+		best_score_inv_reg_strength_idx - numerical index that corresponds to best inverse regularization strength
+		best_score_l1_ratio_idx - numerical index that corresponds to best l1_ratio
+	'''
 	_, n_reg_strengths, n_l1_ratios = cv_predictions.shape
 	cv_scores = np.zeros((n_reg_strengths, n_l1_ratios))
 
@@ -37,13 +59,30 @@ def get_best_CV_score(cv_true_labels, cv_predictions, l1_ratios, beta = 1.5, to_
 	return (best_score_inv_reg_strength_idx, best_score_l1_ratio_idx)
 
 def get_avg_coef_importance(cv_coef):
+	'''
+	Utility fxn to obtain median coefficient importance across all CV. 
+	Importance for a given coef is defined as normalized [by sum of all coef values for a given CV] absolute coefficient value
+	Input: 
+		cv_coef - Np array, Coefficient values from every trained model - [n_cvs, n_coef]
+	Return: 
+		Median importance - flattened np array [n_coef]
+	'''
 	importance = np.abs(cv_coef)
 	importance /= np.sum(importance, axis = 1)[:, np.newaxis]
 	return np.median(importance, axis = 0)
 
 def make_LR_model_from_fitted_CV_model(og_model, seed = 37, keep_zero_coef = False): 
-	#Cannot save LogisticRegressionCV obj as pkl so once fitted use params from CV obj to fit LR
-	
+	'''
+	Utility fxn to allow one to easily save fitted model
+	Cannot save LogisticRegressionCV obj as pkl so once fitted use params from CV obj to fit LR 
+	Input: 
+		og_model - LogisticRegressionCV fitted model instance that you'd like to save
+		seed - Optional, seed value. Doesnt really matter since we are just creating a model copy
+		keep_zero_coef - Optional bool, Whether to keep or remove coefficients = 0, Default = False
+	Return: Tuple
+		new_model - LogisticRegression model with identical params and coefs
+		feat_mask - np boolean array indicating which coef were kept. Only importance if keep_zero_coef = True
+	'''
 	params = {key:val for key,val in og_model.get_params().items() if key not in ['Cs', 'cv', 'l1_ratios', 'refit', 'random_state', 'scoring']}
 	new_model = LogisticRegression(**params, random_state = seed)
 
@@ -61,10 +100,20 @@ def make_LR_model_from_fitted_CV_model(og_model, seed = 37, keep_zero_coef = Fal
 
 	return new_model, feat_mask[0, :]
 
-def LR_train_w_sklearnCV(train_data, n_cv_folds, inv_reg_strength_arr, penalty = 'elasticnet', scoring = 'roc_auc', seed = 37, l1_ratio_arr = None, batch_corrector = None):
-	# if batch_corrector is not None:
-	# 	train_data.X = preprocess_data(batch_corrector, train_data.X)
-		
+def LR_train_w_sklearnCV(train_data, n_cv_folds, inv_reg_strength_arr, penalty = 'elasticnet', scoring = 'roc_auc', seed = 37, l1_ratio_arr = None):
+	'''
+	Training loop for logistic regression model with sklearn default CV 
+	Input: 
+		train_data - instance of ML_data that contains training data. See class_def for details of ML_data
+		n_cv_folds - Number of CV folds to run
+		inv_reg_strength_arr - Inverse regularization strengths to try
+		penalty - Optional string, default = elasticnet. Options include 'l1','l2', or 'elasticnet'
+		scoring - Optional string, default = 'roc_auc'. Scoring metrics. See sklearn for details
+		seed - Optional int, default = 37. Random seed
+		l1_ratio_arr - Optional array-like, default = None, L1 ratios to try [relevant for elastic net]
+	Return: fitted model
+		LogisticRegressionCV model
+	'''
 	lr = LogisticRegressionCV(cv = GroupKFold(n_splits = n_cv_folds).split(X = train_data.X, y = train_data.y, groups = train_data.groups),
 								Cs = inv_reg_strength_arr, penalty = penalty, l1_ratios = l1_ratio_arr, scoring = scoring, 
 								solver = 'saga', max_iter = 10e6, random_state = seed
@@ -77,7 +126,24 @@ def LR_train_w_sklearnCV(train_data, n_cv_folds, inv_reg_strength_arr, penalty =
 
 	return lr
 
-def LR_train_w_CV_controlled(train_data, n_cv_folds, inv_reg_strength_arr, penalty = 'elasticnet', seed = 37, l1_ratio_arr = None, batch_corrector = None):
+def LR_train_w_CV_controlled(train_data, n_cv_folds, inv_reg_strength_arr, penalty = 'elasticnet', seed = 37, l1_ratio_arr = None):
+	'''
+	Training loop for logistic regression model with more fine controlled CV. 
+	Note that this does not return a fitted model but rather the result of CV to refit a model using the best hyperparam identified here and all training data
+	Assesses best model using get_best_CV_score
+	Input: 
+		train_data - instance of ML_data that contains training data. See class_def for details of ML_data
+		n_cv_folds - Number of CV folds to run
+		inv_reg_strength_arr - Inverse regularization strengths to try
+		penalty - Optional string, default = elasticnet. Options include 'l1','l2', or 'elasticnet'
+		scoring - Optional string, default = 'roc_auc'. Scoring metrics. See sklearn for details
+		seed - Optional int, default = 37. Random seed
+		l1_ratio_arr - Optional array-like, default = None, L1 ratios to try [relevant for elastic net]
+	Return: dictionary
+		'best_inv_strength' - inverse regularization strength that corresponds to best model.
+		'best_l1_ratio' - L1 ratio that corresponds to best model.
+		'coef' - coefficient values for all CV that corresponds to best model. Np.array [n_cvs, n_coef]
+	'''
 	n_samples, n_feats = train_data.X.shape
 	n_reg_strengths = len(inv_reg_strength_arr)
 	n_l1_ratios = len(l1_ratio_arr) if l1_ratio_arr is not None else 1
@@ -97,10 +163,6 @@ def LR_train_w_CV_controlled(train_data, n_cv_folds, inv_reg_strength_arr, penal
 	if penalty == 'l2':
 		l1_ratio_arr = np.array([0.0]) #L2 is equivalent to elasticnet with l1_ratio = 1
 	
-	# og_train_data = deepcopy(train_data)
-	# if batch_corrector is not None:
-	# 	train_data.X = preprocess_data(batch_corrector, train_data.X)
-
 	#Loop and CV
 	for inv_reg_strength in inv_reg_strength_arr:
 		l1_ratio_i = 0
@@ -145,6 +207,14 @@ def LR_train_w_CV_controlled(train_data, n_cv_folds, inv_reg_strength_arr, penal
 			}
 
 def make_fig3B_matrix(ML_data_obj_dict, model, meta):
+	'''
+	Utility to create pd df for figure 3B 
+	Input: 
+		ML_data_obj_dict - Dict where keys are str denoting the dataset name (e.g. 'Training') and values are ML_data instances {dataset_name : ML_data_obj}
+		model - Fitted model
+		meta - pd df containing metadata for all samples included in ML_data_obj_dict
+	Return: pd df that contains relevant info for fig 3B including prob_PE, predicted value, and whether a sample was correclty predicted
+	'''
 	sample_indices = [obj.y.index.to_series() for obj in ML_data_obj_dict.values()]
 	sample_indices = pd.concat(sample_indices, axis = 0)
 	df = pd.DataFrame(columns = ['dataset', 'case', 'prob_PE', 'ga_at_collection', 
@@ -167,6 +237,20 @@ def make_fig3B_matrix(ML_data_obj_dict, model, meta):
 	return df
 
 def get_auc_roc_CI(fitted_model, ML_data_obj, seed = 37, ci_interval = 0.025):
+	'''
+	Utility to calculate values corresponding to ROC curve and its area under curve (AUC)/corresponding confidence interval
+	Input: 
+		fitted_model - fitted model to use
+		ML_data_obj - instance of ML_data to use for calculating AUC
+		seed - optional, random seed for bootstrapping CI
+		ci_interval - optional, float denoting confidence interval desired. Default = 0.025 [Corresponds to 95% confidence interval]
+	Return: dictionary
+		'fpr' - Array of FPR for ROC curve
+		'tpr' - Array of TPR for ROC curve
+		'auc' - AUC value
+		'ci_auc_lb' - Lower bound on AUC
+		'ci_auc_ub' - Upper bound on AUC
+	'''
 	y_true = ML_data_obj.y
 	y_prob = fitted_model.predict(ML_data_obj.X)
 	fpr, tpr, _ = roc_curve(y_true = y_true, y_score = y_prob)
