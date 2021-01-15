@@ -8,17 +8,17 @@ class rnaseq_data():
 	Class to easily read and manipulate raw counts data from RNAseq
 	Will import RNAseq data (counts table), normalize using TMM (calculated using EdgeR), and incorporate annotations from mygene_db
 	"""
-	def __init__(self, counts_df_path, tmm_scaling_df_path, counts_index_cols = [0,1], mygene_db = None):
+	def __init__(self, counts_df_path, tmm_scaling_df_path = None, counts_index_cols = [0,1], mygene_db = None):
 		"""
 		Init fxn for rnaseq_data
 		Input:
 			counts_df_path - path to counts table
-			tmm_scaling_df_path - path to TMM norm csv saved after running TMM in R
+			tmm_scaling_df_path - Optional, path to TMM norm csv saved after running TMM in R
 			counts_index_cols - columns that include indices to use. Assumes multiindex of form [gene_name, gene_num] hence [0,1] idx
 			mygene_db - instance of mygene_db to use when getting annotations
 		Attributes:
 			counts_path - points to counts path used for a specific instance
-			tmm_path - counts_path - points to TMM path used for a specific instance
+			tmm_path - points to TMM path used for a specific instance
 			tmm - df with TMM data
 			counts - df with counts data [genes x samples]
 			CPM - df with counts per million reads data, same shape as counts
@@ -29,7 +29,9 @@ class rnaseq_data():
 		self.counts_path = counts_df_path
 		self.tmm_path = tmm_scaling_df_path
 
-		self.tmm = self._read_tmm_scaling_file()
+		self.tmm = None
+		if self.tmm_path is not None:
+			self.tmm = self._read_tmm_scaling_file()
 		self.counts = self._read_counts_csv(counts_index_cols)
 		self.CPM = self.get_CPM()
 		self.logCPM = self.get_logCPM()
@@ -41,18 +43,29 @@ class rnaseq_data():
 			self.get_anno(mygene_db)
 
 	def _read_tmm_scaling_file(self):
+		'''
+		Private class method to read TMM file
+		'''
 		#TMM file generated via R so rename columns to work with python - namely having a . in the col name isn't conducive to object oriented calls which also use .
 		return pd.read_csv(self.tmm_path, index_col = 0).rename(columns = {'lib.size' : "lib_size", "norm.factors" : "norm_scaling"})
 
 	def _read_counts_csv(self, idx_cols):
 		init_df = pd.read_csv(self.counts_path, index_col = idx_cols)
-		return init_df.loc[:, self.tmm.index.to_list()] #Ensure that the TMM and counts table match
+		if self.tmm is not None:
+			init_df = init_df.loc[:, self.tmm.index.to_list()] #Ensure that the TMM and counts table match
+
+		return init_df
 	
 	def get_CPM(self):
 		'''
-		Method to calculate counts per million reads (CPM) using TMM normalization
+		Method to calculate counts per million reads (CPM) using TMM normalization if included.
+		Else sum sample col to obtain 'lib_size'
 		'''
-		lib_sizes = (self.tmm.lib_size * self.tmm.norm_scaling)
+		lib_sizes = self.counts.sum(axis = 0)
+
+		if self.tmm is not None:
+			lib_sizes = (self.tmm.lib_size * self.tmm.norm_scaling)
+
 		return self.counts / lib_sizes * 10**6
 
 	def get_logCPM(self):

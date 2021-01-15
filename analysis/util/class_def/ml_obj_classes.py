@@ -1,3 +1,5 @@
+### Machine learning specific class def
+
 import pandas as pd
 import numpy as np
 from util.class_def.obj_classes import *
