@@ -3,6 +3,17 @@
 from util.plot_default import *
 import pandas as pd
 
+def save_figure_pdf(fig, path_to_save):
+	'''
+	Utility fxn to save a figure without having to retype all the required options.
+	Input:
+		fig - a matplotlib.pyplot.figure instance with the figure you'd like to save
+		path_to_save - the path you'd like to save the figure to
+
+	Returns: Nothing but there should now be a pdf version in 300 dpi with a transparent bkg at path_to_save
+	'''
+	fig.savefig(path_to_save, dpi = 300, bbox_inches = 'tight', transparent = True)
+	
 def DE_plot_order(DE_series, key):
 	'''
 	Utility function defining the category order for DE logFCs called in figure 2D
@@ -15,7 +26,7 @@ def DE_plot_order(DE_series, key):
 		categories = ['1', '2', '3']
 	return pd.Categorical(DE_series, ordered = True, categories=categories)
 
-def nhm_plot_heatmap(to_plot, dfr = None, dfc = None, cmaps = None, **kwargs):
+def nhm_plot_heatmap(to_plot, dfr = None, dfc = None, cmaps = None, cmapCenter_color = 'RdBu_r', **kwargs):
 	'''
 	Utility function to plot heatmap + hierarchical clustering
 	Input: 
@@ -27,10 +38,10 @@ def nhm_plot_heatmap(to_plot, dfr = None, dfc = None, cmaps = None, **kwargs):
 	Return: figure and plot as returned by nheatmap fxn g.run()
 	'''
 	if cmaps is None:
-		g = nhm(data=to_plot, dfr = dfr, dfc=dfc, figsize=(10, 10), linewidths=0, cmapCenter="RdBu_r", 
+		g = nhm(data=to_plot, dfr = dfr, dfc=dfc, figsize=(10, 10), linewidths=0, cmapCenter=cmapCenter_color, 
 		xrot = 90, wspace = 0.05, showxticks = False) 
 	else:
-		g = nhm(data=to_plot, dfr = dfr, dfc=dfc, figsize=(10, 10), linewidths=0, cmapCenter="RdBu_r", 
+		g = nhm(data=to_plot, dfr = dfr, dfc=dfc, figsize=(10, 10), linewidths=0, cmapCenter=cmapCenter_color, 
 			cmaps = cmaps, xrot = 90, wspace = 0.05, showxticks = False) 
 	g.hcluster(method='average', metric='euclidean', optimal_ordering=True)
 	fig, plot = g.run(**kwargs)

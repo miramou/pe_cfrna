@@ -27,6 +27,7 @@ def make_color_map(name, color_list):
     return mpl.colors.LinearSegmentedColormap.from_list(name, color_list, len(color_list))
     
 #Set color maps
+outlier_palette = ["#018571", "#dfc27d"] #non-out, outlier
 discovery_holdout_test_palette = ['#1f78b4', '#1f78b4', '#33a02c', '#33a02c', '#33a02c'] #discovery, hold-out, test
 cntrl_pe_palette = ["#92c5de", "#ca0020"]
 pe_feat_palette = ["#f7f7f7", "#b2182b", "#67001f"] # cntrl, mild, severe
