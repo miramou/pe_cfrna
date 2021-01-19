@@ -111,4 +111,4 @@ dTime = topTable(fit_case, coef=c(3:6), sort.by="B", resort.by = "logFC", p.valu
 dTime_PE = topTable(fit_case, coef=c(2, 7:10), sort.by="B", resort.by = "logFC", p.value = cutoff, number = Inf, confint = TRUE)
 
 write.csv(dTime, "out/de/DE_all_changes_over_gestation.csv")
-write.csv(dTime, "out/de/DE_PEspecific_changes_over_gestation.csv")
+write.csv(dTime_PE, "out/de/DE_PEspecific_changes_over_gestation.csv")
