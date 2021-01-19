@@ -6,6 +6,7 @@ import numpy as np
 import scipy.stats
 import pickle as pkl
 import mygene
+import os
 from gprofiler import GProfiler
 
 from sklearn import cluster, preprocessing
@@ -13,6 +14,14 @@ from kneed import KneeLocator
 
 from statsmodels.stats import multitest
 from util.class_def.obj_classes import *
+
+def check_make_folder(path):
+    '''
+    Checks if a provided path exists. If it does not, creates it.
+    '''
+    if not (os.path.exists(path)):
+        os.makedirs(path)
+    return
 
 def read_pkl(pkl_file):
     '''

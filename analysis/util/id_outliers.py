@@ -41,7 +41,7 @@ def read_merge_qc_files(paths):
         df_full = df if df_made == 0 else pd.concat((df_full, df), axis = 0)
         df_made += 1
 
-    return df_full.round(2)
+    return df_full.round(3)
 
 def get_percentiles(df, p):
     '''
