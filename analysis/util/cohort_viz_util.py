@@ -2,7 +2,30 @@ from util.plot_default import *
 
 def plot_violin_and_swarmplot(df, x_name, y_name, hue_name, orient, violinplot_palette, x_label, y_label, split = False, inner = 'sticks', figsize = (5, 5),
 							include_vline = False, include_hline = False, line_pos = None, line_start = None, line_end = None):
-	
+	'''
+	Plotting utility to overlay swarmplot and violinplot
+
+	Inputs:
+		df - dataframe used for plotting
+		x_name - x var column name in df (str)
+		y_name - y var column name in df (str)
+		hue_name - hue var column name in df (str)
+		orient - either 'h' or 'v', see seaborn (str)
+		violinplot_palette - palette used for violinplot hue (list)
+		x_label - x axis label (str)
+		y_label - y axis label (str)
+		split - split violinplot (bool)
+		inner - violinplot inner (str) see seaborn
+		figsize - figure size (tuple)
+		include_vline - whether to include a vertical line, usually either this or hline (bool)
+		include_hline - whether to include a horizontal line, either this or vline (bool)
+		line_pos - the fixed location to plot line (x axis for vline or y axis hline depending on bool) (int)
+		line_start - the starting location to plot line (y axis for vline or x axis for hline depending on bool) (int)
+		line_end - the ending location to plot line (y axis for vline or x axis for hline depending on bool) (int)
+
+	Returns:
+		fig, ax handles for plot
+	'''
 	fig, ax  = plt.subplots(1, figsize = figsize)
 
 	if include_vline:
@@ -22,7 +45,21 @@ def plot_violin_and_swarmplot(df, x_name, y_name, hue_name, orient, violinplot_p
 	return fig, ax
 
 def plot_full_sample_collection(meta, ga_col_name, pp_col_name, plot_pp = True, term_order = [4,3,2,1], figsize = (10, 5)):
-	
+	'''
+	Plotting utility to plot sample collection during and post-pregnancy with broken axis to denote the time split
+
+	Inputs:
+		meta - dataframe with metadata used for plotting
+		ga_col_name - GA var column name in df (str)
+		pp_col_name - PP collection var column name in df (str)
+		plot_pp - Whether to plot PP collection [Not included in validation] (bool)
+		term_order - Order to plot GA and PP collection on y-axis (str)
+		figsize - figure size (tuple)
+		
+
+	Returns:
+		fig handle for plot
+	'''
 	n_plots = 2 if plot_pp else 1
 	fig, ax = plt.subplots(1, n_plots, sharey = True, figsize = figsize)
 
