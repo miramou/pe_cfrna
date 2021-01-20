@@ -164,7 +164,7 @@ class logFC_data_by_group():
 	Class to easily calculate logFC grouped by some attribute (e.g. time)
 	Also calculates confidence interval around logFC
 	"""
-	def __init__(self, logCPM_df_idx, group_labels, group_col = 'term', CV_cutoff = 0.5, 
+	def __init__(self, logCPM_df_idx, group_labels, group_col = 'term', CV_cutoff = 0.5, logFC_cutoff = 0,
 				lfc_col = 'case', logFC_num = 1, logFC_denom = 0):
 		"""
 		Init fxn for logFC_data_by_group. logCPM_df_idx and group_labels are used to create empty dfs of correct size and labels
@@ -173,6 +173,7 @@ class logFC_data_by_group():
 			group_labels - pd series, all group labels for which logFC should be calculated
 			group_col - str, column name by which to group by
 			CV_cutoff - float, defines the max acceptable coefficient of variation (CV)
+			logFC_cutoff - float, defines the min acceptable |logFC|
 			lfc_col - str, column name that contains labels of 2 groups to be used to calculate logFC
 			logFC_num - [str, int, float], value that corresponds to label for numerator in FC calculation
 			logFC_denom - [str, int, float], value that corresponds to label for denominator in FC calculation
@@ -209,6 +210,10 @@ class logFC_data_by_group():
 		
 		self.CV_mask = pd.DataFrame(columns = self.logFC.columns, index = self.logFC.index, dtype = bool)
 		self.CV_mask.loc[:, :] = False
+
+		#logFC cutoff mask
+		self.logFC_cutoff = logFC_cutoff
+		self.logFC_mask = self.CV_mask.copy()
 	
 	def _check_if_calculated_logFC(self):
 		'''
@@ -234,7 +239,7 @@ class logFC_data_by_group():
 		Private method to calculate logFC using average logCPM values
 		Called by get_grp_avg_logCPM
 		'''
-		return np.round((avgs.loc[:, self.logFC_num] - avgs.loc[:, self.logFC_denom]), 4)
+		return np.round((avgs.loc[:, self.logFC_num] - avgs.loc[:, self.logFC_denom]), 2)
 
 	def get_grp_avgs_logFC(self, logCPM, meta):
 		'''
@@ -342,7 +347,7 @@ class logFC_data_by_group():
 		
 		mean_mask = np.round(np.abs(self.logFC), 1) > min_mean
 		self.CV[mean_mask] = np.round((self.logFC_CI[mean_mask] / self.logFC[mean_mask]), 2)		
-		self.CV_mask[self.CV <= self.CV_cutoff] = True
+		self.CV_mask[self.CV < self.CV_cutoff] = True
 
 	def get_logFC_and_CI_by_group(self, logCPM_df, meta_df, ci_interval = 0.025):
 		'''
@@ -366,6 +371,7 @@ class logFC_data_by_group():
 
 			meta_group = meta_df.loc[meta_df.loc[:, self.group_col] == group]
 			self.logFC.loc[:, group_label] = self.get_grp_avgs_logFC(logCPM_df, meta_group)['logFC']
+			self.logFC_mask.loc[:, group_label] = (self.logFC.loc[:, group_label].abs() >= self.logFC_cutoff)
 
 		self.calculated_logFC = True
 		self._get_neg_mask()
