@@ -7,10 +7,6 @@ import scipy.stats
 import pickle as pkl
 import mygene
 import os
-from gprofiler import GProfiler
-
-from sklearn import cluster, preprocessing
-from kneed import KneeLocator
 
 from statsmodels.stats import multitest
 from util.class_def.obj_classes import *
@@ -51,6 +47,16 @@ def read_sample_meta_table(file_path, index_col = 0):
     Return: an indexed pandas df corresponding to csv at file_path
     '''
     return pd.read_csv(file_path, index_col = index_col)
+
+def preprocess_data(fitted_preprocessor, data):
+    '''
+    Utility fxn to preprocess data using a preprocessor from sklearn.preprocessing and return a pandas df
+    Input: 
+        fitted_preprocessor - A preprocessor class from sklearn.preprocessing that has been fit using .fit() method
+        data - Data to transform using preprocessor
+    Return: pd df with transformed values. indices and columns will match data
+    '''
+    return pd.DataFrame(fitted_preprocessor.transform(data), index = data.index, columns = data.columns)
 
 def multitest_corr(pvals, method = "bonferroni", **kwargs):
     '''
