@@ -6,23 +6,12 @@ import matplotlib.pyplot as plt
 
 from util.class_def.ml_obj_classes import *
 
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GroupKFold
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.metrics import confusion_matrix, fbeta_score, roc_auc_score, classification_report, roc_curve
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 
-def preprocess_data(fitted_preprocessor, data):
-	'''
-	Utility fxn to preprocess data using a preprocessor from sklearn.preprocessing and return a pandas df
-	Input: 
-		fitted_preprocessor - A preprocessor class from sklearn.preprocessing that has been fit using .fit() method
-		data - Data to transform using preprocessor
-	Return: pd df with transformed values. indices and columns will match data
-	'''
-	return pd.DataFrame(fitted_preprocessor.transform(data), index = data.index, columns = data.columns)
-
-def get_best_CV_score(cv_true_labels, cv_predictions, l1_ratios = None, beta = 1.5, to_plot = True):
+def get_best_CV_score(cv_true_labels, cv_predictions, l1_ratios = None, beta = 1.0, to_plot = True):
 	'''
 	Called in LR_train_w_CV_controlled
 	Utility fxn to obtain best cross-validation score and corresponding indices using sklearn metric, fbeta_score
