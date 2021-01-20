@@ -41,13 +41,13 @@ def read_merge_qc_files(paths):
         df_full = df if df_made == 0 else pd.concat((df_full, df), axis = 0)
         df_made += 1
 
-    return df_full.round(3)
+    return df_full.round(2)
 
 def get_percentiles(df, p):
     '''
     Finds the requested percentile for df's QC data
     '''
-    return np.round(np.percentile(df.iloc[:, 0].dropna(), q=[p]), 2)[0]
+    return np.round(np.percentile(df.iloc[:, 0].dropna(), q=[p]), 1)[0]
 
 def plot_dist(df, percentile, figure_name):
     '''
