@@ -2,6 +2,9 @@
 
 import pandas as pd
 import numpy as np
+
+from sklearn.preprocessing import StandardScaler
+from util.gen_utils import preprocess_data
 from util.class_def.obj_classes import *
 
 class data_masks():
@@ -46,7 +49,7 @@ class data_masks():
 			return 'Mask label does not exist. Please pass valid label.'
 
 class ML_data():
-	def __init__(self, meta, rnaseq_inst, y_col, group_col = None, features = None):
+	def __init__(self, meta, rnaseq_inst, y_col, to_batch_correct = False, group_col = None, features = None):
 		self.y = meta.loc[:, y_col]
 
 		self.groups = None
@@ -55,6 +58,11 @@ class ML_data():
 		
 		self.X = None
 		self.get_X(rnaseq_inst, features)
+
+		if to_batch_correct:
+			self.zero_center_scaler = StandardScaler(with_mean = True, with_std = False).fit(self.X)
+			X_zc = preprocess_data(self.zero_center_scaler, self.X)
+			self.X = X_zc
 
 	def shrink_X_filter_genes(self, gene_mask):
 		new_X = self.X.loc[:, gene_mask]
