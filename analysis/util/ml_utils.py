@@ -11,7 +11,7 @@ from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.metrics import confusion_matrix, fbeta_score, roc_auc_score, classification_report, roc_curve
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 
-def get_best_CV_score(cv_true_labels, cv_predictions, l1_ratios = None, beta = 1.0, to_plot = True):
+def get_best_CV_score(cv_true_labels, cv_predictions, l1_ratios = None, beta = 1.5, to_plot = True):
 	'''
 	Called in LR_train_w_CV_controlled
 	Utility fxn to obtain best cross-validation score and corresponding indices using sklearn metric, fbeta_score
