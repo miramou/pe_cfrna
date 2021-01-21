@@ -1,0 +1,24 @@
+name: gen_comp
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.6
+  - matplotlib=3.2.1
+  - numpy
+  - pandas>=1.1.0
+  - scipy
+  - seaborn=0.10.0
+  - scikit-learn
+  - statsmodels
+  - pomegranate
+  - conda-forge::kneed
+  - anaconda::openpyxl
+  - pip
+  - pip:
+    - datatable
+    - nheatmap==0.1.4
+    - mygene
+    - gprofiler-official
+  - xlrd
+  - ipykernel #github.com/Anaconda-Platform/nb_conda_kernels/issues/112
