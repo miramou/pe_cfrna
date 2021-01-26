@@ -3,62 +3,17 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from itertools import product
+import re
 
+from util.gen_utils import read_sample_meta_table
 from util.class_def.ml_obj_classes import *
+from util.class_def.de_obj_classes import de_data
 
 from sklearn.model_selection import GroupKFold
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.metrics import confusion_matrix, fbeta_score, roc_auc_score, classification_report, roc_curve
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
-
-def get_best_CV_score(cv_true_labels, cv_predictions, l1_ratios = None, beta = 1.5, to_plot = True):
-	'''
-	Called in LR_train_w_CV_controlled
-	Utility fxn to obtain best cross-validation score and corresponding indices using sklearn metric, fbeta_score
-	Prints best fbeta score
-	Input: 
-		cv_true_labels - Array-like, ground truth values
-		cv_predictions - Array-like, estimated target returned by classifier
-		l1_ratios - Optional, Array-like, list of l1-ratios tried. Required for plotting
-		beta - beta for fbeta_score. Default = 1.5, See sklearn for details - https://scikit-learn.org/stable/modules/generated/sklearn.metrics.fbeta_score.html
-		to_plot - bool, whether to plot CV scores for all inverse regularization strengths and l1-ratios attempted
-	Return: Tuple
-		best_score_inv_reg_strength_idx - numerical index that corresponds to best inverse regularization strength
-		best_score_l1_ratio_idx - numerical index that corresponds to best l1_ratio
-	'''
-	_, n_reg_strengths, n_l1_ratios = cv_predictions.shape
-	cv_scores = np.zeros((n_reg_strengths, n_l1_ratios))
-
-	for i in range(n_reg_strengths):
-		for j in range(n_l1_ratios):
-			#Beta in fbeta tunes f1 score biasing for recall or precision. Biasing for better recall scores here (Want to make sure to capture all PE)
-			cv_scores[i, j] = fbeta_score(y_true = cv_true_labels, y_pred = cv_predictions[:, i, j], beta = beta)
-
-	best_score_inv_reg_strength_idx, best_score_l1_ratio_idx = np.unravel_index(np.argmax(cv_scores), cv_scores.shape)
-	print('Best fbeta score after CV = %0.3f' % cv_scores[best_score_inv_reg_strength_idx, best_score_l1_ratio_idx])
-
-	if to_plot:
-		plt.figure()
-		for j in range(n_l1_ratios):
-			plt.plot(np.arange(n_reg_strengths), cv_scores[:, j], label = 'L1 ratio = %.2f' % l1_ratios[j])
-		plt.legend()
-		plt.xlabel('Inverse regularization strength index')
-		plt.ylabel('Fbeta score (Beta = %0.1f)' % beta)
-
-	return (best_score_inv_reg_strength_idx, best_score_l1_ratio_idx)
-
-def get_avg_coef_importance(cv_coef):
-	'''
-	Utility fxn to obtain median coefficient importance across all CV. 
-	Importance for a given coef is defined as normalized [by sum of all coef values for a given CV] absolute coefficient value
-	Input: 
-		cv_coef - Np array, Coefficient values from every trained model - [n_cvs, n_coef]
-	Return: 
-		Median importance - flattened np array [n_coef]
-	'''
-	importance = np.abs(cv_coef)
-	importance /= np.sum(importance, axis = 1)[:, np.newaxis]
-	return np.median(importance, axis = 0)
 
 def make_LR_model_from_fitted_CV_model(og_model, seed = 37, keep_zero_coef = False): 
 	'''
@@ -91,7 +46,7 @@ def make_LR_model_from_fitted_CV_model(og_model, seed = 37, keep_zero_coef = Fal
 
 def LR_train_w_sklearnCV(train_data, n_cv_folds, inv_reg_strength_arr, penalty = 'elasticnet', scoring = 'roc_auc', seed = 37, l1_ratio_arr = None):
 	'''
-	Training loop for logistic regression model with sklearn default CV 
+	Single training loop for logistic regression model with sklearn default CV 
 	Input: 
 		train_data - instance of ML_data that contains training data. See class_def for details of ML_data
 		n_cv_folds - Number of CV folds to run
@@ -109,91 +64,150 @@ def LR_train_w_sklearnCV(train_data, n_cv_folds, inv_reg_strength_arr, penalty =
 								)
 	lr.fit(train_data.X, train_data.y)
 
-	print('Fitted LR model has %d non-zero coefficients' % np.sum(lr.coef_[0, :] != 0))
-	print('Classification report:')
-	print(classification_report(train_data.y, lr.predict(train_data.X)))
-
 	return lr
 
-def LR_train_w_CV_controlled(train_data, n_cv_folds, inv_reg_strength_arr, penalty = 'elasticnet', seed = 37, l1_ratio_arr = None):
+def training_pipeline(train_meta, train_rnaseq, train_logFC_per_group, relevant_group_names_in_logFC, 
+						cv_cutoffs_to_try, logFC_cutoffs_to_try, expr_cutoffs_to_try, n_max_coef = 25):
 	'''
-	Training loop for logistic regression model with more fine controlled CV. 
-	Note that this does not return a fitted model but rather the result of CV to refit a model using the best hyperparam identified here and all training data
-	Assesses best model using get_best_CV_score
+	Full training pipeline with feature selection for logistic regression model with sklearn default CV 
 	Input: 
-		train_data - instance of ML_data that contains training data. See class_def for details of ML_data
-		n_cv_folds - Number of CV folds to run
-		inv_reg_strength_arr - Inverse regularization strengths to try
-		penalty - Optional string, default = elasticnet. Options include 'l1','l2', or 'elasticnet'
-		scoring - Optional string, default = 'roc_auc'. Scoring metrics. See sklearn for details
-		seed - Optional int, default = 37. Random seed
-		l1_ratio_arr - Optional array-like, default = None, L1 ratios to try [relevant for elastic net]
-	Return: dictionary
-		'best_inv_strength' - inverse regularization strength that corresponds to best model.
-		'best_l1_ratio' - L1 ratio that corresponds to best model.
-		'coef' - coefficient values for all CV that corresponds to best model. Np.array [n_cvs, n_coef]
+		train_meta - metadata associated with training data
+		train_rnaseq - rnaseq obj instance associated with training data, see rnaseq_data in obj_classes for more info
+		train_logFC_per_group - logFC_data_by_group obj instance asso with feature selection
+		relevant_group_names_in_logFC - list with relevant column names from train_logFC_per_group to be used during feature selection
+		cv_cutoffs_to_try - array of possible cutoff values for CV in train_logFC_per_group
+		logFC_cutoffs_to_try - array of possible cutoff values for logFC in train_logFC_per_group
+		expr_cutoffs_to_try - array of possible cutoff values for CPM expression in train_rnaseq.CPM.
+		n_max_coef - max coefficient number a model can have to be accepted [Helpful to avoid overfitting given small data]
+	Return: 
+		dict with {'model' : CalibratedClassifierCV fitted model, 'score' : best score, 'combo' : best combo of CV, logFC, expr cutoffs}
 	'''
-	n_samples, n_feats = train_data.X.shape
-	n_reg_strengths = len(inv_reg_strength_arr)
-	n_l1_ratios = len(l1_ratio_arr) if l1_ratio_arr is not None else 1
 
-	#Init CV stats arrays
-	cv_coef = np.zeros((n_cv_folds, n_reg_strengths, n_l1_ratios, n_feats))
-	cv_predictions = np.zeros((n_samples, n_reg_strengths, n_l1_ratios))
-	cv_true_labels = np.ones((n_samples)) * -1 
-
-	#Loop counter
-	reg_strength_i = 0
-
-	#Make sure loop works with all penalties
-	if penalty == 'l1':
-		l1_ratio_arr = np.array([1.0]) #L1 is equivalent to elasticnet with l1_ratio = 1
-
-	if penalty == 'l2':
-		l1_ratio_arr = np.array([0.0]) #L2 is equivalent to elasticnet with l1_ratio = 1
+	cv_logFC_combos = list(product(cv_cutoffs_to_try, logFC_cutoffs_to_try))
+	cv_logFC_high_expr_combos = list(product(cv_logFC_combos, expr_cutoffs_to_try))
 	
-	#Loop and CV
-	for inv_reg_strength in inv_reg_strength_arr:
-		l1_ratio_i = 0
-		print('Now fitting model %d of %d with inverse regularization strength = %0.3f' % (reg_strength_i + 1, n_reg_strengths, inv_reg_strength))
+	n_combos = len(cv_logFC_high_expr_combos)
+	cutoff_combos = {'cutoff_combo_' + str(i + 1) : {'cv' : cv_logFC_high_expr_combos[i][0][0], 
+													'logFC' : cv_logFC_high_expr_combos[i][0][1], 
+													'expr' : cv_logFC_high_expr_combos[i][1]}
+					for i in np.arange(n_combos)
+					}
+					
+	#Holder vars for best model
+	best_score = 0
+	best_combo = None
+	best_model = None
+	best_model_feats = None
+	
+	#Init train_data
+	train_data = ML_data(meta = train_meta, rnaseq_inst = train_rnaseq, y_col = 'case', to_batch_correct = True, group_col = 'subject')
 
-		for l1_ratio in l1_ratio_arr:
-			cv_fold_i = 0
-			sample_i = 0 #Sometimes multiple samples per cv fold
-			if penalty == 'elasticnet':
-				print('Now fitting model %d of %d with l1_ratio = %0.2f' % (l1_ratio_i + 1, n_l1_ratios, l1_ratio))
+	#Set up other LR hyperparams
+	n_cv = len(train_data.groups.unique()) #LOOCV - 1 fold per subject
+	Cs = np.logspace(start = -3, stop = 1, num = 30) #Inv reg strengths to test
+	l1_ratios = np.linspace(0.25, 1, num = 5) #L1 ratios to test, Want some sparsity. 0 = L2, 1 = L1
+	
+	i = 0
+	for cutoff_combo_name, cutoff_combo in cutoff_combos.items():
+		train_logFC_per_group.mod_CV_mask(cutoff_combo['cv'])
+		train_logFC_per_group.mod_logFC_mask(cutoff_combo['logFC'])
+		
+		init_feat_mask = np.logical_and(train_logFC_per_group.CV_mask.loc[:, relevant_group_names_in_logFC], 
+										train_logFC_per_group.logFC_mask.loc[:, relevant_group_names_in_logFC]).sum(axis = 1) > 0
+		
+		high_expr_mask = train_rnaseq.CPM.loc[train_logFC_per_group.logFC.index, train_data.y.index].median(axis = 1) > cutoff_combo['expr']		
+		init_feats = train_logFC_per_group.logFC.loc[np.logical_and(high_expr_mask, init_feat_mask)].index
 
-			for cv_train_idx, cv_test_idx in GroupKFold(n_splits = n_cv_folds).split(X = train_data.X, y = train_data.y, groups = train_data.groups):
-				#Pull training samples + features (no zero skew) for this round
-				cv_X, cv_y = train_data.filter_samples(cv_train_idx, is_iloc = True)
-				feat_sel_mask = np.ones(cv_X.shape[1], dtype = bool) #og_train_data.get_no_zero_skew_mask(cv_train_idx, is_iloc = True, no_zero_skew_cutoff = 0.01) 
+		if init_feats.shape[0] == 0: #Sometimes no genes come up
+			continue
+		
+		train_data = ML_data(meta = train_meta, rnaseq_inst = train_rnaseq, y_col = 'case', to_batch_correct = True, group_col = 'subject', features = init_feats)
 
-				#Fit model
-				lr_cv = LogisticRegression(C = inv_reg_strength, penalty = 'elasticnet', l1_ratio = l1_ratio, 
-											solver = 'saga', max_iter = 10e6, random_state = seed)
-				lr_cv.fit(cv_X.loc[:, feat_sel_mask], cv_y)
+		curr_lr = LR_train_w_sklearnCV(train_data, n_cv_folds = n_cv, inv_reg_strength_arr = Cs, scoring = 'accuracy',
+										 penalty = 'elasticnet', l1_ratio_arr = l1_ratios)
+	
+		curr_score = roc_auc_score(y_true = train_data.y, y_score = curr_lr.predict(train_data.X))
+		#fbeta_score(y_true = train_data.y, y_pred = curr_lr.predict(train_data.X), beta = 1.0)
+		curr_n_coef = curr_lr.coef_.shape[1]
+		
+		if curr_score > best_score and  curr_n_coef <= n_max_coef:
+			#To save would need object without CV generator
+			lr, feat_mask = make_LR_model_from_fitted_CV_model(curr_lr, keep_zero_coef = False)
+			best_model_feats = train_data.get_masked_feats(feat_mask)
+			train_data.shrink_X_filter_genes(feat_mask)
+			
+			best_score = curr_score
+			best_model = CalibratedClassifierCV(lr, method = 'sigmoid', cv = 'prefit').fit(train_data.X, train_data.y)
+			best_combo = cutoff_combo
 
-				#Save stats on withheld fold
-				n_test_samples = len(cv_test_idx)
-				cv_test_X, cv_test_y = train_data.filter_samples(cv_test_idx, is_iloc = True)
-				cv_coef[cv_fold_i, reg_strength_i, l1_ratio_i, feat_sel_mask] = lr_cv.coef_[0, :]
-				cv_predictions[sample_i : (sample_i + n_test_samples), reg_strength_i, l1_ratio_i] = lr_cv.predict(cv_test_X.loc[:, feat_sel_mask])
+		i += 1
+		if i % 50 == 0:
+			print('Now completed %d iterations' % i)
+			
+	print('Best score = %.2f with %d features and CV cutoff = %.2f, logFC cutoff = %.2f, CPM cutoff = %d' % (best_score, len(best_model_feats), 
+		best_combo['cv'], best_combo['logFC'], best_combo['expr']))
+	return {'model' : best_model, 'combo' : best_combo, 'score' : best_score, 'features' : best_model_feats}
 
-				if reg_strength_i == 0:
-					cv_true_labels[sample_i : (sample_i + n_test_samples)] = cv_test_y
+def get_classification_results(dataset_label, model, data_to_use):
+	'''
+	Utility to print classification model results
+	Input:
+		dataset_label - str, labeling dataset during printing
+		model - fitted model object
+		data_to_use - ML_data obj instance
+	Prints AUC, confusion matrix, and classification report
+	'''
+	print('%s: Calibrated LR Classification report:' % dataset_label)
+	print('ROC AUC = %0.2f' % roc_auc_score(y_true = data_to_use.y, y_score = model.predict(data_to_use.X)))
+	print(confusion_matrix(data_to_use.y, model.predict(data_to_use.X)))
+	print(classification_report(data_to_use.y, model.predict(data_to_use.X)))
+	return
 
-				cv_fold_i += 1
-				sample_i += n_test_samples
+def read_delvecchio_meta(biosample_results_path, sra_results_path):
+	'''
+	Utility to read biosample_result.txt file and pull out relevant information. 
+	Specific to the DelVecchio et al BioSample file
 
-			l1_ratio_i += 1
+	Input:
+		biosample_results_path - filepath to file that contains Biosample results
+		sra_results_path - filepath to file that contains SRA Run Table 
+	Returns
+		pandas df with relevant sample specific metadata
+	'''
+	with open(biosample_results_path) as fp:
+		curr_line = fp.readline()
+		
+		is_sample_line = True
+		data_dict = {key : [] for key in ['subj_id', 'sample_type', 'sample_id']}
+		
+		while curr_line:
+			if is_sample_line:
+				elems = re.split(": |, |\n| \(|\)", curr_line)
+				data_dict['subj_id'].append(elems[1].replace(" ", "_"))
+				data_dict['sample_type'].append(elems[2].replace(" ", "_"))
+			if 'BioSample: SAMN' in curr_line :
+				data_dict['sample_id'].append(re.search('SAMN\\d+', curr_line).group())
+			
+			is_sample_line = True if curr_line == "\n" else False
+			curr_line = fp.readline()
 
-		reg_strength_i += 1
+	meta = pd.DataFrame(data_dict).set_index('sample_id').sort_values('subj_id')
+	sra_run_table = read_sample_meta_table(sra_results_path)
 
-	best_score_inv_reg_strength_idx, best_score_l1_ratio_idx = get_best_CV_score(cv_true_labels, cv_predictions, l1_ratio_arr, beta = 1.5, to_plot = True)
-	return {'best_inv_strength' : inv_reg_strength_arr[best_score_inv_reg_strength_idx], 
-			'best_l1_ratio' : l1_ratio_arr[best_score_l1_ratio_idx], 
-			'coef' : cv_coef[:, best_score_inv_reg_strength_idx, best_score_l1_ratio_idx, :]
-			}
+	meta = meta.merge(sra_run_table.loc[:, ['BioSample', 'complication_during_pregnancy']], left_index = True, right_on = 'BioSample', sort = True)
+	meta.reset_index(inplace = True)
+	meta.set_index('Run', inplace = True)
+
+	#Add term col
+	meta.insert(meta.shape[1], 'term', np.nan) 
+	for label, term in {'1st_Trimester' : 1, '2nd_Trimester' : 2, '3rd_Trimester' : 3}.items():
+		meta.loc[meta.sample_type == label, 'term'] = term
+
+	meta.insert(meta.shape[1], 'case', 0) 
+	meta.loc[meta.complication_during_pregnancy.str.contains('Preeclampsia'), 'case'] = 1
+
+	meta.index.rename('sample', inplace = True)
+	return meta
 
 def make_fig3B_matrix(ML_data_obj_dict, model, meta):
 	'''
