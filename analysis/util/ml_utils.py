@@ -4,16 +4,44 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from itertools import product
-import re
 
-from util.gen_utils import read_sample_meta_table
 from util.class_def.ml_obj_classes import *
 from util.class_def.de_obj_classes import de_data
 
 from sklearn.model_selection import GroupKFold
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-from sklearn.metrics import confusion_matrix, fbeta_score, roc_auc_score, classification_report, roc_curve
-from sklearn.calibration import CalibratedClassifierCV, calibration_curve
+from sklearn.metrics import confusion_matrix, roc_auc_score, classification_report, roc_curve
+
+def get_model_stats(dataset_name, ML_data_obj, model):
+	'''
+	Utility fxn to get PPV, NPV, Spec, Sens from 2x2 confusion matrix
+	Input:
+		dataset_name - str, dataset label
+		ML_data_obj - ML_data obj instance
+		model - fitted model obj
+	Return 
+		PPV = TP / (TP + FP)
+		NPV = TN / (TN + FN)
+		Sensitivity = TP / (TP + FN)
+		Specificity = TN / (TN + FP)
+	'''
+
+	curr_confusion_matrix = confusion_matrix(ML_data_obj.y, model.predict(ML_data_obj.X))
+	tn = curr_confusion_matrix[0, 0]
+	fp = curr_confusion_matrix[0, 1]
+	fn = curr_confusion_matrix[1, 0]
+	tp = curr_confusion_matrix[1, 1]
+	
+	specs = {}
+	specs['PPV'] = (tp / (tp + fp)).round(2)
+	specs['NPV'] = (tn / (tn + fn)).round(2)
+	specs['Sensitivity'] = (tp / (tp + fn)).round(2)
+	specs['Specificity'] = (tn / (tn + fp)).round(2)
+
+	print('%s: Specificity = %d%%, Sensitivity = %d%%, NPV = %d%%, PPV = %d%%' % (dataset_name, specs['PPV']*100, specs['NPV']*100, 
+																					specs['Sensitivity']*100, specs['Specificity']*100))
+
+	return specs
 
 def make_LR_model_from_fitted_CV_model(og_model, seed = 37, keep_zero_coef = False): 
 	'''
@@ -66,13 +94,12 @@ def LR_train_w_sklearnCV(train_data, n_cv_folds, inv_reg_strength_arr, penalty =
 
 	return lr
 
-def training_pipeline(train_meta, train_rnaseq, train_logFC_per_group, relevant_group_names_in_logFC, 
+def training_pipeline(train_rnaseq_meta, train_logFC_per_group, relevant_group_names_in_logFC, 
 						cv_cutoffs_to_try, logFC_cutoffs_to_try, expr_cutoffs_to_try, n_max_coef = 25):
 	'''
 	Full training pipeline with feature selection for logistic regression model with sklearn default CV 
 	Input: 
-		train_meta - metadata associated with training data
-		train_rnaseq - rnaseq obj instance associated with training data, see rnaseq_data in obj_classes for more info
+		train_rnaseq_meta - rnaseq_and_meta_data associated with training data, see rnaseq_and_meta_data in obj_classes for more info
 		train_logFC_per_group - logFC_data_by_group obj instance asso with feature selection
 		relevant_group_names_in_logFC - list with relevant column names from train_logFC_per_group to be used during feature selection
 		cv_cutoffs_to_try - array of possible cutoff values for CV in train_logFC_per_group
@@ -100,7 +127,7 @@ def training_pipeline(train_meta, train_rnaseq, train_logFC_per_group, relevant_
 	best_model_feats = None
 	
 	#Init train_data
-	train_data = ML_data(meta = train_meta, rnaseq_inst = train_rnaseq, y_col = 'case', to_batch_correct = True, group_col = 'subject')
+	train_data = ML_data(train_rnaseq_meta, y_col = 'case', to_batch_correct = True, group_col = 'subject')
 
 	#Set up other LR hyperparams
 	n_cv = len(train_data.groups.unique()) #LOOCV - 1 fold per subject
@@ -115,29 +142,27 @@ def training_pipeline(train_meta, train_rnaseq, train_logFC_per_group, relevant_
 		init_feat_mask = np.logical_and(train_logFC_per_group.CV_mask.loc[:, relevant_group_names_in_logFC], 
 										train_logFC_per_group.logFC_mask.loc[:, relevant_group_names_in_logFC]).sum(axis = 1) > 0
 		
-		high_expr_mask = train_rnaseq.CPM.loc[train_logFC_per_group.logFC.index, train_data.y.index].median(axis = 1) > cutoff_combo['expr']		
+		high_expr_mask = train_rnaseq_meta.rnaseq.CPM.loc[train_logFC_per_group.logFC.index, train_data.y.index].median(axis = 1) > cutoff_combo['expr']		
 		init_feats = train_logFC_per_group.logFC.loc[np.logical_and(high_expr_mask, init_feat_mask)].index
 
 		if init_feats.shape[0] == 0: #Sometimes no genes come up
 			continue
 		
-		train_data = ML_data(meta = train_meta, rnaseq_inst = train_rnaseq, y_col = 'case', to_batch_correct = True, group_col = 'subject', features = init_feats)
+		train_data = ML_data(train_rnaseq_meta, y_col = 'case', to_batch_correct = True, group_col = 'subject', features = init_feats)
 
 		curr_lr = LR_train_w_sklearnCV(train_data, n_cv_folds = n_cv, inv_reg_strength_arr = Cs, scoring = 'accuracy',
 										 penalty = 'elasticnet', l1_ratio_arr = l1_ratios)
 	
 		curr_score = roc_auc_score(y_true = train_data.y, y_score = curr_lr.predict(train_data.X))
-		#fbeta_score(y_true = train_data.y, y_pred = curr_lr.predict(train_data.X), beta = 1.0)
 		curr_n_coef = curr_lr.coef_.shape[1]
 		
 		if curr_score > best_score and  curr_n_coef <= n_max_coef:
 			#To save would need object without CV generator
-			lr, feat_mask = make_LR_model_from_fitted_CV_model(curr_lr, keep_zero_coef = False)
+			best_model, feat_mask = make_LR_model_from_fitted_CV_model(curr_lr, keep_zero_coef = False)
 			best_model_feats = train_data.get_masked_feats(feat_mask)
 			train_data.shrink_X_filter_genes(feat_mask)
 			
 			best_score = curr_score
-			best_model = CalibratedClassifierCV(lr, method = 'sigmoid', cv = 'prefit').fit(train_data.X, train_data.y)
 			best_combo = cutoff_combo
 
 		i += 1
@@ -157,87 +182,54 @@ def get_classification_results(dataset_label, model, data_to_use):
 		data_to_use - ML_data obj instance
 	Prints AUC, confusion matrix, and classification report
 	'''
-	print('%s: Calibrated LR Classification report:' % dataset_label)
-	print('ROC AUC = %0.2f' % roc_auc_score(y_true = data_to_use.y, y_score = model.predict(data_to_use.X)))
+	print('%s results:' % dataset_label)
+	
+	if data_to_use.y.unique().shape[0] > 1: #Can only calc AUC, precision, recall with 2 data classes
+		print('ROC AUC = %0.2f' % roc_auc_score(y_true = data_to_use.y, y_score = model.predict(data_to_use.X)))
+		print('Report:')
+		print(classification_report(data_to_use.y, model.predict(data_to_use.X)))
+
+	print('Confusion matrix:')
 	print(confusion_matrix(data_to_use.y, model.predict(data_to_use.X)))
-	print(classification_report(data_to_use.y, model.predict(data_to_use.X)))
+	print()
 	return
 
-def read_delvecchio_meta(biosample_results_path, sra_results_path):
+def make_probPE_and_gene_matrix(ML_data_obj_dict, model):
 	'''
-	Utility to read biosample_result.txt file and pull out relevant information. 
-	Specific to the DelVecchio et al BioSample file
-
-	Input:
-		biosample_results_path - filepath to file that contains Biosample results
-		sra_results_path - filepath to file that contains SRA Run Table 
-	Returns
-		pandas df with relevant sample specific metadata
-	'''
-	with open(biosample_results_path) as fp:
-		curr_line = fp.readline()
-		
-		is_sample_line = True
-		data_dict = {key : [] for key in ['subj_id', 'sample_type', 'sample_id']}
-		
-		while curr_line:
-			if is_sample_line:
-				elems = re.split(": |, |\n| \(|\)", curr_line)
-				data_dict['subj_id'].append(elems[1].replace(" ", "_"))
-				data_dict['sample_type'].append(elems[2].replace(" ", "_"))
-			if 'BioSample: SAMN' in curr_line :
-				data_dict['sample_id'].append(re.search('SAMN\\d+', curr_line).group())
-			
-			is_sample_line = True if curr_line == "\n" else False
-			curr_line = fp.readline()
-
-	meta = pd.DataFrame(data_dict).set_index('sample_id').sort_values('subj_id')
-	sra_run_table = read_sample_meta_table(sra_results_path)
-
-	meta = meta.merge(sra_run_table.loc[:, ['BioSample', 'complication_during_pregnancy']], left_index = True, right_on = 'BioSample', sort = True)
-	meta.reset_index(inplace = True)
-	meta.set_index('Run', inplace = True)
-
-	#Add term col
-	meta.insert(meta.shape[1], 'term', np.nan) 
-	for label, term in {'1st_Trimester' : 1, '2nd_Trimester' : 2, '3rd_Trimester' : 3}.items():
-		meta.loc[meta.sample_type == label, 'term'] = term
-
-	meta.insert(meta.shape[1], 'case', 0) 
-	meta.loc[meta.complication_during_pregnancy.str.contains('Preeclampsia'), 'case'] = 1
-
-	meta.index.rename('sample', inplace = True)
-	return meta
-
-def make_fig3B_matrix(ML_data_obj_dict, model, meta):
-	'''
-	Utility to create pd df for figure 3B 
+	Utility to create df with probability(PE) per sample for multiple datasets 
 	Input: 
-		ML_data_obj_dict - Dict where keys are str denoting the dataset name (e.g. 'Training') and values are ML_data instances {dataset_name : ML_data_obj}
+		ML_data_obj_dict - Dict where keys are str denoting the dataset name (e.g. 'Discovery') and values are ML_data instances {dataset_name : ML_data_obj}
+		meta_obj_dict - pd df containing metadata for all samples included in ML_data_obj_dict
 		model - Fitted model
-		meta - pd df containing metadata for all samples included in ML_data_obj_dict
-	Return: pd df that contains relevant info for fig 3B including prob_PE, predicted value, and whether a sample was correclty predicted
+	Return: 
+		df - pd df that contains prob_PE, predicted value, and whether a sample was correctly predicted
+		gene_vals - pd df that contains gene vals for genes used in model for all datasets
 	'''
 	sample_indices = [obj.y.index.to_series() for obj in ML_data_obj_dict.values()]
 	sample_indices = pd.concat(sample_indices, axis = 0)
-	df = pd.DataFrame(columns = ['dataset', 'case', 'prob_PE', 'ga_at_collection', 
-								'pe_onset_ga_wk', 'pe_feature', 'delta_collection_onset',
+	df = pd.DataFrame(columns = ['dataset', 'case', 'prob_PE', 
 								'prediction', 'correctly_predicted'], index = sample_indices)
 
+	gene_vals = None
+
 	for key, ML_data_obj in ML_data_obj_dict.items():
+
+		#Get df vals
 		idx_vals = ML_data_obj.y.index
 		df.loc[idx_vals, 'dataset'] = key
 		df.loc[idx_vals, ['case']] = ML_data_obj.y
 		df.loc[idx_vals, 'prob_PE'] = model.predict_proba(ML_data_obj.X)[:, 1] #0 = p(Not PE), 1 = p(PE)
 		df.loc[idx_vals, 'prediction'] = model.predict(ML_data_obj.X)
-		df.loc[idx_vals, ['ga_at_collection', 'pe_onset_ga_wk', 'pe_feature']] = meta.loc[idx_vals, ['ga_at_collection', 'pe_onset_ga_wk', 'pe_feature']]
 
-	df.ga_at_collection = df.ga_at_collection.astype(int)
+		#Get gene_vals vals
+		gene_vals = ML_data_obj.X if gene_vals is None else pd.concat((gene_vals, ML_data_obj.X), axis = 0)
+
 	df.prob_PE = df.prob_PE.astype(float)
-	df.pe_onset_ga_wk = df.pe_onset_ga_wk.astype(float)
-	df.delta_collection_onset = df.ga_at_collection - df.pe_onset_ga_wk
-	df.correctly_predicted = df.case == df.prediction
-	return df
+	df.correctly_predicted = (df.case == df.prediction)
+
+	gene_vals = gene_vals.join(df.loc[:, ['case', 'dataset']])
+
+	return df, gene_vals
 
 def get_auc_roc_CI(fitted_model, ML_data_obj, seed = 37, ci_interval = 0.025):
 	'''
@@ -258,9 +250,7 @@ def get_auc_roc_CI(fitted_model, ML_data_obj, seed = 37, ci_interval = 0.025):
 	y_prob = fitted_model.predict(ML_data_obj.X)
 	fpr, tpr, _ = roc_curve(y_true = y_true, y_score = y_prob)
 	auc = roc_auc_score(y_true, y_prob)
-	
-	print(confusion_matrix(y_true, y_prob))
-	
+		
 	n_iters = 1000
 	np.random.seed(seed)
 	delta_auc = []
