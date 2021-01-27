@@ -263,9 +263,6 @@ def read_save_munchel_data(filepath, cnts_out_path, meta_out_path, mult_samples_
 	case[meta.loc[:, 'pe_type'].str.contains('PE')] = 1
 	meta.insert(meta.shape[1], 'case', case)
 
-	#Add dataset name
-	meta.insert(meta.shape[1], 'dataset', dataset_name)
-
 	#Save full meta and full cnts
 	meta.to_csv(meta_out_path)
 	df.to_csv(cnts_out_path)
