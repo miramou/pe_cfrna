@@ -2,13 +2,24 @@
 
 import pandas as pd
 import numpy as np
+from copy import deepcopy
+
+def read_sample_meta_table(file_path, index_col = 0):
+    '''
+    Utility fxn to read a metadata csv file with pandas. Assumes that first column is index unless otherwise specificied
+    Input: 
+        file_path - path to metadata csv file to read
+        index_col - the column number associated with the index
+    Return: an indexed pandas df corresponding to csv at file_path
+    '''
+    return pd.read_csv(file_path, index_col = index_col)
 
 class rnaseq_data():
 	"""
 	Class to easily read and manipulate raw counts data from RNAseq
 	Will import RNAseq data (counts table), normalize using TMM (calculated using EdgeR), and incorporate annotations from mygene_db
 	"""
-	def __init__(self, counts_df_path, tmm_scaling_df_path = None, counts_index_cols = [0,1], mygene_db = None):
+	def __init__(self, counts_df_path, tmm_scaling_df_path = None, counts_index_cols = [0,1], mygene_db = None, mL_plasma = 1.0):
 		"""
 		Init fxn for rnaseq_data
 		Input:
@@ -16,9 +27,11 @@ class rnaseq_data():
 			tmm_scaling_df_path - Optional, path to TMM norm csv saved after running TMM in R
 			counts_index_cols - columns that include indices to use. Assumes multiindex of form [gene_name, gene_num] hence [0,1] idx
 			mygene_db - instance of mygene_db to use when getting annotations
+			mL_plasma - mL of plasma cfRNA was extracted from, specific to cfRNA. Default is 1.0 which does not affect normalization.
 		Attributes:
 			counts_path - points to counts path used for a specific instance
 			tmm_path - points to TMM path used for a specific instance
+			mL_plasma - float, mL plasma from which cfRNA extracted from. Default is 1.0 which does not affect normalization
 			tmm - df with TMM data
 			counts - df with counts data [genes x samples]
 			CPM - df with counts per million reads data, same shape as counts
@@ -28,6 +41,7 @@ class rnaseq_data():
 		"""
 		self.counts_path = counts_df_path
 		self.tmm_path = tmm_scaling_df_path
+		self.mL_plasma = mL_plasma
 
 		self.tmm = None
 		if self.tmm_path is not None:
@@ -66,6 +80,7 @@ class rnaseq_data():
 		if self.tmm is not None:
 			lib_sizes = (self.tmm.lib_size * self.tmm.norm_scaling)
 
+		lib_sizes *= self.mL_plasma
 		return self.counts / lib_sizes * 10**6
 
 	def get_logCPM(self):
@@ -153,11 +168,72 @@ class rnaseq_data():
 		self._check_if_annotated()
 
 		gene_type_idx = self.anno.loc[self.anno.gene_type.isin(gene_types)].index
+		self.anno = self.anno.loc[gene_type_idx]
 		self.counts = self.counts.loc[gene_type_idx]
 		self.CPM = self.CPM.loc[gene_type_idx]
 		self.logCPM = self.logCPM.loc[gene_type_idx]
 
 		return
+
+	def filter_to_samples(self, sample_idx):
+		'''
+		Method to filter rnaseq data instance to genes of specific types
+		Input:
+			sample_idx - indices for samples to keep
+		Modified attributes: 
+			counts, CPM, and logCPM now all take shape [n_genes, n_samples_in_mask]
+			where n_samples_in_mask are all samples in sample_idx
+		'''
+		self.counts = self.counts.loc[:, sample_idx]
+		self.CPM = self.CPM.loc[:, sample_idx]
+		self.logCPM = self.logCPM.loc[:, sample_idx]
+
+		return
+
+class rnaseq_and_meta_data():
+	"""
+	Class to process and keep together asso rnaseq data instance and meta table
+	"""
+	def __init__(self, meta_df_path, counts_df_path, tmm_scaling_df_path = None, **kwargs):
+		"""
+		Init fxn for rnaseq_and_meta_data
+		Input:
+			meta_df_path - path to metadata df
+			counts_df_path - path to counts table
+			tmm_scaling_df_path - Optional, path to TMM norm csv saved after running TMM in R
+			**kwargs - Any additional kwargs to rnaseq_data call
+		"""
+		self.meta = read_sample_meta_table(meta_df_path)
+		self.rnaseq = rnaseq_data(counts_df_path, tmm_scaling_df_path = tmm_scaling_df_path, **kwargs)
+
+	def filter_to_gene_types(self, gene_types):
+		"""
+		Method to call corresponding method from rnaseq_data
+		"""
+		self.rnaseq.filter_to_gene_types(gene_types)
+
+	def filter_samples(self, sample_mask, inplace = True):
+		"""
+		Method to filter samples to those in sample_mask
+		Inputs:
+			sample_mask - boolean mask
+			inplace - if False, create and return modified obj copy
+		"""
+		if inplace:
+			self.meta = self.meta.loc[sample_mask]
+			self.rnaseq.filter_to_samples(self.meta.index)
+			return
+
+		obj_copy = deepcopy(self)
+		obj_copy.meta = obj_copy.meta.loc[sample_mask]
+		obj_copy.rnaseq.filter_to_samples(obj_copy.meta.index)
+		return obj_copy
+
+	def join(self, rnaseq_and_meta_data_obj_2):
+		self.meta = pd.concat((self.meta, rnaseq_and_meta_data_obj_2.meta), axis = 0)
+		self.rnaseq.counts = self.rnaseq.counts.join(rnaseq_and_meta_data_obj_2.rnaseq.counts)
+		self.rnaseq.CPM = self.rnaseq.CPM.join(rnaseq_and_meta_data_obj_2.rnaseq.CPM)
+		self.rnaseq.logCPM = self.rnaseq.logCPM.join(rnaseq_and_meta_data_obj_2.rnaseq.logCPM)
 
 class logFC_data_by_group():
 	"""
@@ -170,7 +246,7 @@ class logFC_data_by_group():
 		Init fxn for logFC_data_by_group. logCPM_df_idx and group_labels are used to create empty dfs of correct size and labels
 		Input:
 			logCPM_df_idx - pd indices, correspond to logCPM (e.g. from an instance of rnaseq_data.logCPM)
-			group_labels - pd series, all group labels for which logFC should be calculated
+			group_labels - dictionary, keys = values in group_col, values = labels. all group labels for which logFC should be calculated
 			group_col - str, column name by which to group by
 			CV_cutoff - float, defines the max acceptable coefficient of variation (CV)
 			logFC_cutoff - float, defines the min acceptable |logFC|
@@ -209,7 +285,6 @@ class logFC_data_by_group():
 		self.CV_cutoff = CV_cutoff #By how much can the CI vary (e.g. 0.2 = 20% around avg FC)
 		
 		self.CV_mask = pd.DataFrame(columns = self.logFC.columns, index = self.logFC.index, dtype = bool)
-		self.CV_mask.loc[:, :] = False
 
 		#logFC cutoff mask
 		self.logFC_cutoff = logFC_cutoff
@@ -326,6 +401,22 @@ class logFC_data_by_group():
 
 		return delta_approaching_0
 	
+	def mod_CV_mask(self, new_CV_cutoff):
+		'''
+		Method to modify CV mask
+		
+		Input:
+			new_CV_cutoff - new cutoff val for CV
+		
+		Modified attributes: 
+			CV_cutoff - now = new_CV_cutoff
+			CV_mask - modified to reflect which CV pass threshold
+		'''
+		self._check_if_calculated_logFC()
+		self.CV_cutoff = new_CV_cutoff
+		self.CV_mask.loc[:, :] = False
+		self.CV_mask[self.CV < self.CV_cutoff] = True
+
 	def _id_stable_logFC(self, min_mean = 1e-1):
 		'''
 		Private method to calculate (CV) 'coefficient of variation' for each gene and identify genes for which logFC is reasonably stable
@@ -347,14 +438,30 @@ class logFC_data_by_group():
 		
 		mean_mask = np.round(np.abs(self.logFC), 1) > min_mean
 		self.CV[mean_mask] = np.round((self.logFC_CI[mean_mask] / self.logFC[mean_mask]), 2)		
-		self.CV_mask[self.CV < self.CV_cutoff] = True
+		self.mod_CV_mask(self.CV_cutoff)
+
+	def mod_logFC_mask(self, new_logFC_cutoff):
+		'''
+		Method to modify logFC mask
+		
+		Input:
+			new_logFC_cutoff - new cutoff val for logFC
+		
+		Modified attributes: 
+			logFC_cutoff - now = new_logFC_cutoff
+			logFC_mask - modified to reflect which logFC pass threshold
+		'''
+		self._check_if_calculated_logFC()
+		self.logFC_cutoff = new_logFC_cutoff
+		self.logFC_mask.loc[:, :] = False
+		self.logFC_mask[self.logFC.abs() >= self.logFC_cutoff] = True
 
 	def get_logFC_and_CI_by_group(self, logCPM_df, meta_df, ci_interval = 0.025):
 		'''
 		Method to calculate logFC and corresponding confidence interval for every group
 		
 		Input:
-			logCPM_df - df of logCPM values to use during bootsrap
+			logCPM_df - df of logCPM values to use during bootstrap
 			meta_df - df of sample metadata to use for resampling
 			ci_interval - float, defines confidence interval eg 0.025 = 95% CI
 		
@@ -371,9 +478,9 @@ class logFC_data_by_group():
 
 			meta_group = meta_df.loc[meta_df.loc[:, self.group_col] == group]
 			self.logFC.loc[:, group_label] = self.get_grp_avgs_logFC(logCPM_df, meta_group)['logFC']
-			self.logFC_mask.loc[:, group_label] = (self.logFC.loc[:, group_label].abs() >= self.logFC_cutoff)
 
 		self.calculated_logFC = True
+		self.mod_logFC_mask(self.logFC_cutoff)
 		self._get_neg_mask()
 
 		for group, group_label in self.group_labels.items():
@@ -384,4 +491,5 @@ class logFC_data_by_group():
 
 		print('Identifying when during gestation we observe changes')
 		self._id_stable_logFC()
+
 

@@ -2,6 +2,7 @@
 
 import pandas as pd
 import numpy as np
+from copy import copy
 
 from sklearn.preprocessing import StandardScaler
 from util.gen_utils import preprocess_data
@@ -111,30 +112,31 @@ class ML_data():
 	"""
 	Class for ML_data
 	"""
-	def __init__(self, meta, rnaseq_inst, y_col, to_batch_correct = False, group_col = None, features = None):
+	def __init__(self, rnaseq_meta, y_col, to_batch_correct = False, 
+				group_col = None, features = None, only_gene_name = False):
 		"""
 		Init fxn for ML_data
 		Input:
-			meta - meta df used
-			rnaseq_inst - rnaseq data class instance corresponding to meta df
+			rnaseq_meta - rnaseq_and_meta_data associated with data, see rnaseq_and_meta_data in obj_classes for more info
 			y_col - Column name asso with prediction task and y_var
 			to_batch_correct - Whether to batch correct (zero-center) data (bool)
 			group_col - Blocking column name (e.g. subject)
 			features - Indices to filter ML_data to contain. Will impute to 0 if missing (Indices should match rnaseq_inst indices)
-
+			only_gene_name - bool to indicate whether genes should be referred to just by name or by name and ENSG ID
 		Attributes:
 			y - column in meta that corresponds to y_col
 			groups - column in meta that corresponds to group_col if group_col included
 			X - rnaseq.logCPM that contains only features if included [n_samples, n_features]	
 		"""
-		self.y = meta.loc[:, y_col]
+		self.y = rnaseq_meta.meta.loc[:, y_col]
 
 		self.groups = None
 		if group_col is not None:
-			self.groups = meta.loc[:, group_col]
+			self.groups = rnaseq_meta.meta.loc[:, group_col]
 		
 		self.X = None
-		self.get_X(rnaseq_inst, features)
+		self.only_gene_name = only_gene_name
+		self.get_X(rnaseq_meta.rnaseq, features)
 
 		if to_batch_correct:
 			self.zero_center_scaler = StandardScaler(with_mean = True, with_std = False).fit(self.X)
@@ -181,8 +183,14 @@ class ML_data():
 		logCPM = rnaseq.logCPM.copy()
 		if features is not None:
 			logCPM = logCPM.reindex(features)
-			print("%d features missing" % np.sum(logCPM.iloc[:, 0].isna()))
+			n_feat_missing = np.sum(logCPM.iloc[:, 0].isna())
 			logCPM = logCPM.fillna(0)
+
+			if n_feat_missing > 0:
+				print("%d features missing" % n_feat_missing)
+			
+		if isinstance(logCPM.index, pd.MultiIndex) and self.only_gene_name:
+			logCPM.reset_index('gene_num', drop = True, inplace = True)
 
 		self.X = logCPM.loc[:, self.y.index.to_list()].T
 
@@ -221,9 +229,15 @@ class ML_data():
 			is_iloc - whether sample_idx is loc or iloc
 
 		Returns:
-			X with only samples in sample_idx s.t. shape is [n_samples_in_sample_idx, n_features]
+			New ML_data instance with only samples in sample_idx s.t. X shape is [n_samples_in_sample_idx, n_features]
 		'''
+		new_obj = copy(self)
+
 		if is_iloc:
-			return (self.X.iloc[sample_idx, :], self.y.iloc[sample_idx])
+			new_obj.X = self.X.iloc[sample_idx, :]
+			new_obj.y = self.y.iloc[sample_idx]
+		else:
+			new_obj.X = self.X.loc[sample_idx, :]
+			new_obj.y = self.y.loc[sample_idx]
 		
-		return (self.X.loc[sample_idx, :], self.y.loc[sample_idx])		
+		return new_obj		
