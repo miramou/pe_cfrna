@@ -38,16 +38,6 @@ def write_pkl(obj, pkl_file):
     with open(pkl_file, "wb") as f:
         pkl.dump(obj, f, pkl.HIGHEST_PROTOCOL)
 
-def read_sample_meta_table(file_path, index_col = 0):
-    '''
-    Utility fxn to read a metadata csv file with pandas. Assumes that first column is index unless otherwise specificied
-    Input: 
-        file_path - path to metadata csv file to read
-        index_col - the column number associated with the index
-    Return: an indexed pandas df corresponding to csv at file_path
-    '''
-    return pd.read_csv(file_path, index_col = index_col)
-
 def preprocess_data(fitted_preprocessor, data):
     '''
     Utility fxn to preprocess data using a preprocessor from sklearn.preprocessing and return a pandas df
