@@ -46,3 +46,65 @@ def nhm_plot_heatmap(to_plot, dfr = None, dfc = None, cmaps = None, cmapCenter_c
 	g.hcluster(method='average', metric='euclidean', optimal_ordering=True)
 	fig, plot = g.run(**kwargs)
 	return fig, plot
+
+def plot_roc_curves(roc_auc_dict, linestyles, palette, save_path):
+	fig, ax = plt.subplots()
+
+	plot_i = 0
+	for label, roc_auc in roc_auc_dict.items():
+		plt.plot(roc_auc['fpr'], roc_auc['tpr'], color = discovery_test_palette[plot_i], lw = 1.5, linestyle = linestyles[plot_i],
+				 label = '%s (AUC = %.2f [%.2f - %.2f])' % (label, roc_auc['auc'], roc_auc['ci_auc_lb'], roc_auc['ci_auc_ub']))
+		plot_i += 1
+
+	plt.plot([0, 1], [0, 1], color='gray', linestyle='--') #No discrimination line
+	plt.xlabel("False positive rate")
+	plt.ylabel("True positive rate")
+
+	plt.legend(loc = 'lower right')
+	save_figure_pdf(fig, save_path)
+	return
+
+
+def plot_violin_and_swarmplot(df, x_name, y_name, hue_name, orient, violinplot_palette, x_label, y_label, split = False, inner = 'sticks', figsize = (5, 5),
+							include_vline = False, include_hline = False, line_pos = None, line_start = None, line_end = None):
+	'''
+	Plotting utility to overlay swarmplot and violinplot
+
+	Inputs:
+		df - dataframe used for plotting
+		x_name - x var column name in df (str)
+		y_name - y var column name in df (str)
+		hue_name - hue var column name in df (str)
+		orient - either 'h' or 'v', see seaborn (str)
+		violinplot_palette - palette used for violinplot hue (list)
+		x_label - x axis label (str)
+		y_label - y axis label (str)
+		split - split violinplot (bool)
+		inner - violinplot inner (str) see seaborn
+		figsize - figure size (tuple)
+		include_vline - whether to include a vertical line, usually either this or hline (bool)
+		include_hline - whether to include a horizontal line, either this or vline (bool)
+		line_pos - the fixed location to plot line (x axis for vline or y axis hline depending on bool) (int)
+		line_start - the starting location to plot line (y axis for vline or x axis for hline depending on bool) (int)
+		line_end - the ending location to plot line (y axis for vline or x axis for hline depending on bool) (int)
+
+	Returns:
+		fig, ax handles for plot
+	'''
+	fig, ax  = plt.subplots(1, figsize = figsize)
+
+	if include_vline:
+		plt.vlines(line_pos, line_start, line_end, linestyle = '--', lw = 2, color = 'gray')
+	if include_hline:
+		plt.hlines(line_pos, line_start, line_end, linestyle = '--', lw = 2, color = 'gray')
+
+	sns.swarmplot(x = x_name, y = y_name, hue = hue_name, orient = orient, dodge = split, data = df,
+					size = 6, lw = 2, edgecolor = 'k', color = 'k')
+	
+	sns.violinplot(x = x_name, y = y_name, hue = hue_name, orient = orient, split = split, dodge = False, inner = inner, cut = 0,
+					data = df, palette = violinplot_palette)
+
+	plt.xlabel(x_label)
+	plt.ylabel(y_label)
+
+	return fig, ax
