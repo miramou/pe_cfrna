@@ -1,9 +1,34 @@
+### RT-qPCR data class def
+
 import numpy as np
 import pandas as pd
 from itertools import product
 
 class rt_qpcr_data():
+    """
+    Class to read and process raw qPCR data
+    """
     def __init__(self, plate_paths_dict, plate_map, target_map, target_info, has_RT_control, rt_control_name = 'RT', NTC_gen_threshold = None):
+        """
+        Init fxn for rt_qpcr_data
+        Input:
+            plate_paths_dict - dictionary where key = plate name, val = file path to plate data from Biorad-384 machine
+            plate_map - map that indicates which sample is in which well
+            target_map - map that indicates which gene primers are in which well
+            target_info - additional info about target like fluorophore [e.g. FAM], location, etc
+            has_RT_control - bool, indicates whether reverse transcription (RT) control was run per sample
+            rt_control_name - only useful if has_RT_control = True, name of RT control
+            NTC_gen_threshold - assuming NTC = not detected, what general threshold should be imposed as NTC
+        Attributes:
+            has_RT_control - see above
+            rt_control_name - see above
+            calculated_dCq - bool, indicates whether delta Cq has been calculated
+            dCq - array that will contain delta Cq values
+            dCq_cntrl_target - the name of the target gene used as control in dCq calc
+            NTC_gen_threshold - see above
+            qPCR - pandas df with qPCR info
+            ntc_per_target - NTC threshold per gene target
+        """
         self.has_RT_control = has_RT_control
         self.rt_control_name = rt_control_name
 
@@ -25,16 +50,37 @@ class rt_qpcr_data():
         return 
     
     def _check_if_calculated_dCq(self):
+        '''
+        Error check to ensure dCq is calc prior to any manipulation that requires it
+        '''
         if not self.calculated_dCq:
             raise(NameError('dCq has not been calculated yet'))
 
     def _read_qpcr_data(self, plate_xlsx, sheet_name = "0"):
+        '''
+        Private method to read a single qPCR plate data and pull out relevant info [fluor values for gene target]
+        Inputs:
+            plate_xlsx - path to plate excel doc
+            sheet_name - name of sheet, default is 0 based on Biorad 384 machine naming conventions
+
+        Returns:
+            pd df with Cq values from relevant fluor for plate
+        '''
         data = pd.read_excel(plate_xlsx, sheet_name = sheet_name)
         rows_cols_fluor = pd.MultiIndex.from_tuples([(data.Well[i][0], int(data.Well[i][1:]), data.Fluor[i]) for i in range(data.shape[0])], 
             names = ["row", "col", "fluor"])
         return pd.DataFrame(data = {'Cq' : data.Cq.round(2).to_list()}, index = rows_cols_fluor) 
 
     def _process_qPCR_data(self, plate_paths_dict, plate_map, target_map, target_info):
+        '''
+        Private method to process qPCR plate data, wrapper around _read_qpcr_data
+        Inputs:
+            See init for descriptions
+
+        Modified attributes:
+            qPCR - mean_Cq, std_Cq, and tech rep Cq vals modified, outlier measurements [inconsistent Cqs axs tech reps] identified and flagged
+            ntc_per_target - modified to reflect NTC for each gene target, if none detected, default to gen_threshold set
+        '''
         grouping = ['gene_target', 'sample']
         plate_data = {} #Init dict to store raw values
 
@@ -77,11 +123,26 @@ class rt_qpcr_data():
         return
 
     def _get_isec_Cq_df_w_gene(self, gene_for_isec, col_name = 'mean_Cq_cntrl'):
+        '''
+        Private method used when calculating dCq to get intersection of values
+        Inputs:
+            gene_for_isec - gene to intersect with mean_Cq_cntrl
+
+        Returns:
+            intersected qPCR table with gene_target and control values
+        '''
         Cq_vals_cntrl = self.qPCR.loc[gene_for_isec].mean_Cq.squeeze()
         Cq_vals_cntrl.name = col_name
         return self.qPCR.merge(Cq_vals_cntrl, left_on = 'sample', right_index = True, how = 'inner')
 
     def filter_qPCR(self):
+        '''
+        Method to filter qPCR plate data to only those that pass QC [below_NTC, no outlier tech reps, pass RT_control]
+        
+
+        Modified attributes:
+            qPCR - filtered to only samples that passed
+        '''
         init_pass_mask = np.logical_and(self.qPCR.to_include, self.qPCR.below_ntc)
         n_before = self.qPCR.shape[0]
         self.qPCR = self.qPCR.loc[init_pass_mask]
@@ -93,6 +154,14 @@ class rt_qpcr_data():
         return
 
     def get_dCq(self, cntrl_gene_target):
+        '''
+        Method to calculate delta Cq between a gene of interest and control_gene_target
+        Inputs:
+            cntrl_gene_target - the gene that is used as a control s.t. dCq = Cq - Cq_cntrl
+
+        Modified attributes:
+            dCq, dCq_cntrl_target, calculated_dCq 
+        '''
         self.dCq_cntrl_target = cntrl_gene_target
         merged_df = self._get_isec_Cq_df_w_gene(cntrl_gene_target)
         self.dCq = (merged_df.mean_Cq - merged_df.mean_Cq_cntrl)
@@ -100,6 +169,18 @@ class rt_qpcr_data():
         return
         
     def get_ddCq(self, metadata, gene, group_col = 'case', num_group = 1, denom_group = 0):
+        '''
+        Method to calc delta delta Cq
+        Inputs:
+            metadata - metadata df
+            gene - gene of interest
+            group_col - column_name in metadata for which ddCq will be calculated
+            num_group - numerator or left hand side of ddCq
+            denom_group - denominator or right hand side of ddCq
+
+        Returns:
+            ddCq for given gene
+        '''
         self._check_if_calculated_dCq()
 
         dCq_avg = {}
@@ -110,9 +191,30 @@ class rt_qpcr_data():
         return (dCq_avg[num_group] - dCq_avg[denom_group]).round(2)
 
     def get_copy_num_using_std_curve(self, slope, intercept):
+        '''
+        Method to get copy num using standard curve
+        Inputs:
+            Slope - best fit slope according to standard curve that can be used to back out copy num
+            Intercept - best fit intercept according to standard curve
+
+        Return:
+            copy_num - Based on std curve
+        '''
         return 2**((self.qPCR.mean_Cq - intercept) / slope)
 
     def get_fold_change(self, metadata, which_method, gene, group_col = 'case', num_group = 1, denom_group = 0, **kwargs):
+        '''
+        Method to calculate fold change using qPCR data
+        Inputs:
+            Metadata - metadata df
+            which_method - str, either ddCq or copy_num
+            gene - gene for which to calc fold change
+            group_col, num_group_denom_group - see get_ddCq
+            **kwargs - additional arguments to pass for when using copy_num, slope and intercept
+
+        Returns:
+            Calculated fold change
+        '''
         assert(which_method in ['ddCq', 'copy_num']), 'Method must be ddCq or copy_num'
 
         if which_method == 'ddCq':
