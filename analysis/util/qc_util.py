@@ -106,6 +106,11 @@ def get_pe_type(metadata, pe_onset_col = 'pe_onset_ga_wk', case_col = 'case'):
 def scale_data(df, scaler):
 	'''
 	Scale df and return as pandas df instead of array 
+	Input:
+		df - pandas df to start
+		scaler - instance of scaler to use (unfitted, just initialized)
+	Return:
+		transformed df with data in df transformed using fitted scaler
 	'''
 	scaler.fit(df)
 	return pd.DataFrame(scaler.transform(df), index = df.index, columns = df.columns)
