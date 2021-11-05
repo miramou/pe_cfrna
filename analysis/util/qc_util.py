@@ -3,6 +3,7 @@
 import pandas as pd
 import numpy as np
 import re
+from copy import deepcopy
 
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
@@ -26,11 +27,12 @@ def filter_genes_CPMcutoff(CPM_df, CPM_cutoff = 0.5, frac_samples_exp = 0.75):
 	print("%d genes (Fraction = %f) passed cutoff" % (np.sum(keep), np.sum(keep)/CPM_df.shape[0]))
 	return keep
 
-def mod_qc_data_to_plot(qc):
+def mod_qc_data_to_plot(qc, neg_cntrl_idx):
 	'''
 	Make qc data easier to visualize via plot
 	Input:
 		qc - df containing QC data
+		neg_cntrl_idx - indices of negative control (H2O) samples
 	Return:
 		qc - cleaned df that contains
 			(1) Values within plotting range [no NA and rescaled very large values]
@@ -38,19 +40,48 @@ def mod_qc_data_to_plot(qc):
 	'''
 	qc.loc[qc.bias_frac.isna(), "bias_frac"] = 1.0 #Sometimes cannot estimate
 	qc.loc[qc.intron_exon_ratio>1000, "intron_exon_ratio"] = 10 #rescale for standard scaling below to make sense
-	qc.sort_values(by="is_outlier", inplace=True)
-	qc.rename(index=str, columns={"ribo_frac":"Ribosomal fraction", 
-									"intron_exon_ratio":"DNA contamination", 
-									"bias_frac":"RNA degradation",
-									"is_outlier" : "Outlier"}, inplace=True)
+	qc['Outlier'] = qc.is_outlier.astype(str).replace({'True' : 'GTrue'}) #Change temporarily so that heatmap categories for colors works [alphabetized]
+	
+	qc.loc[neg_cntrl_idx, 'Outlier'] = 'NC' #Negative control
+	qc['Outlier'] = pd.Categorical(qc['Outlier'], ordered = True, categories = ['False', 'GTrue', 'NC']) #Add letter G to True just for ordering
+
+	qc.sort_values(by="Outlier", inplace=True)
+	qc.rename(index=str, columns={"reads_to_genes" : "N reads assigned to genes",
+								"intron_exon_ratio":"DNA contamination", 
+								"bias_frac":"RNA degradation",
+								}, inplace=True)
 	return qc
 
-def read_qc_data(qc_path):
+def read_qc_data(qc_path, neg_cntrl_idx):
 	'''
 	Read QC data and modify for plotting
+
+	neg_cntrl_idx - indices of negative control (H2O) samples run through entire pipeline
 	'''
 	init_df = pd.read_csv(qc_path, sep = "\t", index_col = 0)
-	return mod_qc_data_to_plot(init_df)
+	return mod_qc_data_to_plot(init_df, neg_cntrl_idx)
+
+def get_bmi_groups(metadata, bmi_col = 'bmi', new_col = 'bmi_grp', cutoffs = np.array([30, 25, 18.5]), labels = ['Obese', 'Overweight', 'Healthy', 'Underweight']):
+	'''
+	Get bmi group for all samples
+
+	Inputs:
+		metadata - sample_metadata df
+		bmi_col - column name that contains bmi info
+		cutoffs - cutoffs used to define bmi groups in descending order
+		labels - labels for bmi groups in descending order
+
+	Returns
+		np.array of same length as metadata.shape[0] with corresponding bmi group for every sample in df
+	'''
+
+	bmi_grp = pd.Series(data = labels[0], index = metadata.index, dtype = str, name = new_col)
+
+	for i in range(len(cutoffs)):
+		mask = metadata.loc[:, bmi_col] < cutoffs[i]
+		bmi_grp[mask] = labels[(i+1)]
+
+	return bmi_grp#.to_frame()
 
 def get_term_labels(metadata, ga_col, has_pp = True, pp_col = 'is_pp', cutoffs = np.array([40, 23, 13])):
 	'''
@@ -95,11 +126,11 @@ def get_pe_type(metadata, pe_onset_col = 'pe_onset_ga_wk', case_col = 'case'):
 	pe_type = pd.Series(index = metadata.index, name = 'pe_type', dtype = str)
 	is_cntrl = (metadata.loc[:, case_col] == 0)
 	is_early = metadata.loc[:, pe_onset_col] < 34
-	is_late = np.logical_and(~is_early, ~is_cntrl)
+	is_late = metadata.loc[:, pe_onset_col] >= 34
 
 	pe_type[is_cntrl] = 'control'
 	pe_type[np.logical_and(is_early, ~is_cntrl)] = 'early'
-	pe_type[is_late] = 'late'
+	pe_type[np.logical_and(is_late, ~is_cntrl)] = 'late'
 
 	return pe_type
 	
@@ -151,8 +182,14 @@ def pca_and_viz_qc(qc_data, logCPM_df, gene_qc_mask, pca_plot_title):
 		heatmap - plt.figure() with heatmap
 		pca - plt.figure() with PCA
  	'''
-	qc_df_no_outliers = qc_data.loc[~qc_data.Outlier]
-	print('%d samples (%.2f) passed QC' % (qc_df_no_outliers.shape[0], (qc_df_no_outliers.shape[0]/qc_data.shape[0])))
+	qc_data.sort_values(by = 'Outlier', inplace = True)
+	logCPM_df = logCPM_df.loc[:, qc_data.index]
+
+	qc_df_no_outliers = qc_data.loc[~qc_data.is_outlier]
+	qc_df_no_nc = qc_data.loc[~(qc_data.Outlier == 'NC')]
+
+	print('%d samples (%.2f) passed QC' % (qc_df_no_outliers.shape[0], (qc_df_no_outliers.shape[0]/qc_df_no_nc.shape[0])))
+
 	logCPM_df_no_sample_outliers = logCPM_df.loc[:, qc_df_no_outliers.index.to_list()]
 
 	pcas_dict = {'All samples' : calc_pca(logCPM_df, qc_data.loc[:, 'Outlier'].to_frame()), 
@@ -160,19 +197,21 @@ def pca_and_viz_qc(qc_data, logCPM_df, gene_qc_mask, pca_plot_title):
 													qc_df_no_outliers.loc[:, 'Outlier'].to_frame(), rm_na = False),
 				'Samples and genes that pass QC' : calc_pca(logCPM_df_no_sample_outliers.loc[gene_qc_mask, :], 
 					  										qc_df_no_outliers.loc[:, 'Outlier'].to_frame(), rm_na = False)
-				}
+				}	
 
-	heatmap, _ = nhm_plot_heatmap(scale_data(qc_data.loc[:, ['Ribosomal fraction', 'RNA degradation', 'DNA contamination']], RobustScaler()).T, 
+	heatmap, _, _ = nhm_plot_heatmap(scale_data(qc_data.loc[:, ['N reads assigned to genes', 'RNA degradation', 'DNA contamination']], RobustScaler()).T, 
 						  dfc = qc_data.loc[:, 'Outlier'].to_frame(),
-						 cmaps = {'Outlier' : make_color_map("",outlier_palette)},
-						 center_args = {'mid' : 0}
+						 cmaps = {'Outlier' : make_color_map("",outlier_palette2)},
+						 center_args = {'mid' : 0},
 						 )
 
 	pca, ax = plt.subplots(1, 3, figsize = (10, 5))
 	ax_i = 0
 	for pc_name, pc_df in pcas_dict.items():
-		palette_to_use = outlier_palette if ax_i == 0 else [outlier_palette[0]]
-		sns.scatterplot(x = 'PC1', y = 'PC2', hue = 'Outlier', data = pc_df, ax = ax[ax_i], color = outlier_palette[0], palette = palette_to_use)
+		palette_to_use = outlier_palette2 
+		hue_name = 'Outlier'
+		sns.scatterplot(x = 'PC1', y = 'PC2', hue = hue_name, data = pc_df, ax = ax[ax_i], hue_order = pc_df[hue_name].dtype.categories.to_list(), 
+			palette = palette_to_use)
 		ax[ax_i].set_title(pc_name)
 
 		if ax_i > 0:
@@ -183,6 +222,29 @@ def pca_and_viz_qc(qc_data, logCPM_df, gene_qc_mask, pca_plot_title):
 	plt.suptitle(pca_plot_title, y = 1.05)
 	plt.tight_layout()
 	return heatmap, pca
+
+def split_stnfd_rnaseq_meta_dict(og_dict, new_sample_idx):
+	'''
+	Utility to split stanford RNAseq data into discovery and validation
+	Input
+		og_dict - dictionary containing all rnaseq data
+		new_sample_idx - specifies the indices to pull from each part of dict
+
+	Returns
+		dict that only contains new_sample_idx
+	'''
+	new_dict = {key : og_dict[key].loc[new_sample_idx] for key in og_dict.keys() if key not in ['rnaseq', 'subj_meta', 'pe_addntl_subj_meta', 'ba_rna_conc']}
+
+	new_dict['ba_rna_conc'] = og_dict['ba_rna_conc'].reindex(new_sample_idx).dropna() #Not all samples run on BA so use reindex instead of loc
+
+	new_dict['rnaseq'] = deepcopy(og_dict['rnaseq'])
+	new_dict['rnaseq'].filter_to_samples(new_sample_idx)
+
+	new_subj_idx = new_dict['sample_meta'].subject.drop_duplicates()
+	new_dict['subj_meta'] = og_dict['subj_meta'].loc[og_dict['subj_meta'].index.isin(new_subj_idx)].join(
+		og_dict['pe_addntl_subj_meta'].reindex(new_subj_idx).dropna(), on = 'subject', how = 'outer')
+	
+	return new_dict
 
 def read_save_delvecchio_meta(biosample_results_path, sra_results_path, out_path):
 	'''
@@ -200,7 +262,7 @@ def read_save_delvecchio_meta(biosample_results_path, sra_results_path, out_path
 		curr_line = fp.readline()
 		
 		is_sample_line = True
-		data_dict = {key : [] for key in ['subj_id', 'sample_type', 'sample_id']}
+		data_dict = {key : [] for key in ['subj_id', 'sample_type', 'sample_id', 'geo_id']}
 		
 		while curr_line:
 			if is_sample_line:
@@ -209,6 +271,8 @@ def read_save_delvecchio_meta(biosample_results_path, sra_results_path, out_path
 				data_dict['sample_type'].append(elems[2].replace(" ", "_"))
 			if 'BioSample: SAMN' in curr_line :
 				data_dict['sample_id'].append(re.search('SAMN\\d+', curr_line).group())
+			if 'GEO: ' in curr_line:
+				data_dict['geo_id'].append(re.search('GSM\\d+', curr_line).group())
 			
 			is_sample_line = True if curr_line == "\n" else False
 			curr_line = fp.readline()

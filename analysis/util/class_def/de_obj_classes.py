@@ -7,13 +7,14 @@ class de_data():
 	"""
 	Class to easily load DE table from R
 	"""
-	def __init__(self, de_df_path, alpha = 0.05, de_type = 'case'):
+	def __init__(self, de_df_path, alpha = 0.05, de_type = 'case', to_round = False):
 		"""
 		Init fxn for de_data
 		Input:
 			de_df_path - path to DE table csv
 			alpha - cutoff value
 			de_type - what was contrasted
+			to_round - whether to round adj_pval prior to getting mask
 		Attributes:
 			de_path - see above
 			de_type - see above
@@ -28,8 +29,9 @@ class de_data():
 
 		de_init = self._read_de_file()
 		self.de = self._parse_de_file(de_init)
-		self.is_sig_mask = self.get_sig_mask()
-
+		self.is_sig_mask = self.get_sig_mask(to_round)
+		self.sig_genes = self.de.loc[self.is_sig_mask].index
+		
 	def _read_de_file(self):
 		'''
 		Private class method to read DE table
@@ -47,10 +49,15 @@ class de_data():
 		de_init = de_init.assign(gene_name = gene_1idx.get_level_values(0), gene_num = "ENSG" + gene_1idx.get_level_values(1))
 		return de_init.reset_index(drop = True).set_index(["gene_name", "gene_num"]).sort_values("adj_pval")
 
-	def get_sig_mask(self):
+	def get_sig_mask(self, to_round = False):
 		'''
 		Identifies which genes are DEGs
+		to_round - whether to round adj_pval prior to getting mask
 		'''
+		if to_round:
+			rounded_padj = self.de.adj_pval.round(2)
+			self.de.adj_pval = rounded_padj
+
 		return (self.de.adj_pval <= self.alpha)
 
 	def intersect_with_gene_set(self, gene_idx):

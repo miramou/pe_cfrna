@@ -5,7 +5,6 @@ import pandas as pd
 import numpy as np
 import scipy.stats
 import pickle as pkl
-import mygene
 import os
 
 from statsmodels.stats import multitest
@@ -50,14 +49,14 @@ def preprocess_data(fitted_preprocessor, data):
     '''
     return pd.DataFrame(fitted_preprocessor.transform(data), index = data.index, columns = data.columns)
 
-def get_proportion_and_CI(count, n_total, alpha = 0.05, method = 'jeffreys'):
+def get_proportion_and_CI(count, n_total, alpha = 0.1, method = 'jeffreys'):
     '''
     Utility fxn to get proportion and CI bound on proportion (PPV, NPV, Spec, Sens)
     See statsmodels.stats.proportion.proportion_confint for details
     Input:
         count - the number of successes
         n_total - the total number of obs [depending on proportion = row sum or col sum]
-        alpha - sig level, default = 0.05 which for jeffreys this corresponds to 95% CI and use alpha/2
+        alpha - sig level, default = 0.1 which for jeffreys this corresponds to 90% CI and use alpha/2
     '''
     prop = (count / n_total).round(2) * 100
     ci_low, ci_upp = proportion_confint(count, n_total, alpha = alpha, method = method)
@@ -120,7 +119,7 @@ def multitest_corr(pvals, method = "bonferroni", **kwargs):
     '''
     return multitest.multipletests(pvals, method = method, **kwargs)
 
-def test_and_adj(test_combos, data, label_col, col_to_test, alternative, use_ttest = False, corr_method = "bonferroni"):
+def test_and_adj(test_combos, data, label_col, col_to_test, alternative, use_ttest = False, use_fisher = False, corr_method = "bonferroni"):
     '''
     Utility fxn to perform hypothesis testing and multiple hypothesis correction. Assumes alpha = 0.05. Default test is Mann-Whitney U
     Input: 
@@ -154,6 +153,12 @@ def test_and_adj(test_combos, data, label_col, col_to_test, alternative, use_tte
             pval = twoside_pval
             if alternative != 'two-sided':
                 pval = (twoside_pval / 2) if (tstat > 0) else (1 - (twoside_pval / 2)) #Get 1-sided pval from 2-sided
+        elif use_fisher:
+            contingency_table = np.ones((2,2))*-1
+            
+            contingency_table[:, 0] = [x_data.sum(), x_data.shape[0] - x_data.sum()] #Assumes T/F data
+            contingency_table[:, 1] = [y_data.sum(), y_data.shape[0] - y_data.sum()] #Assumes T/F data
+            pval = np.array(scipy.stats.fisher_exact(table = contingency_table, alternative = alternative))[1]
         else:
             pval = scipy.stats.mannwhitneyu(x = x_data, y = y_data, alternative = alternative).pvalue 
         
@@ -161,3 +166,21 @@ def test_and_adj(test_combos, data, label_col, col_to_test, alternative, use_tte
 
     pvals_adj = multitest_corr(np.array(list(pvals.values())), method = corr_method)
     return pvals, pvals_adj
+
+def read_tissue_spec_gini_csv(csv_path, organ):
+    '''
+    Utility to read in sets of genes that specific to cell-types in a given tissue
+    Generated using method described in Vorperian et al 2021 - calculate gini index in a given single cell atlas and cross ref with HPA for whole body specificity
+
+    Input:
+        csv_path - path to file
+        organ - organ that single cell atlas came from
+    Return
+        df in an expected format
+    '''
+    tissue_spec_genes = pd.read_csv(csv_path, index_col = 0).reset_index().melt(id_vars = 'index', var_name = 'cell_type', value_name = 'gini')
+    tissue_spec_genes['cell_type'] = tissue_spec_genes.cell_type.str.split('-gini', expand=True).loc[:, 0].str.lower()
+    tissue_spec_genes.dropna(inplace = True)
+    tissue_spec_genes.rename(columns = {'index' : 'gene_num', 'gini' : 'Gini', 'cell_type' : 'max_exp_in'}, inplace = True)
+    tissue_spec_genes['organ'] = organ
+    return tissue_spec_genes.set_index('gene_num')

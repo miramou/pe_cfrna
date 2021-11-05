@@ -28,10 +28,17 @@ def make_color_map(name, color_list):
     
 #Set color maps
 outlier_palette = ["#018571", "#dfc27d"] #non-out, outlier
-discovery_holdout_test_palette = ['#1f78b4', '#1f78b4', '#33a02c', '#33a02c', '#33a02c'] #discovery, hold-out, test
+outlier_palette2 = ["#018571", "#d8b365", "#8c510a"] #non-out, outlier, nc
+
+discovery_validation_palette = ['#1f78b4', '#9ecae1'] #discovery, val
+discovery_test1_palette = ['#1f78b4', '#33a02c', '#33a02c'] #discovery, test
+discovery_test2_palette = ['#1f78b4', '#1f78b4', '#33a02c', '#b2df8a'] #discovery, test
+discovery_munchel_palette = ['#1f78b4', '#b2df8a', '#b2df8a'] #discovery, test, test
 cntrl_pe_palette = ["#92c5de", "#ca0020"]
+cntrl_pe_pe_w_cond_palette = ["#92c5de", "#f4a582", "#ca0020"]
 pe_feat_palette = ["#f7f7f7", "#b2182b", "#67001f"] # cntrl, mild, severe
+pe_feat_palette2 = ["#000000", "#e08214", "#b2182b"] # cntrl, mild, severe
 pe_type_palette = ["#f7f7f7", "#67001f", "#b2182b"] # cntrl, early, late
 
 #Set term label mapping
-term_labels = {1 : 'Early gestation', 2 : 'Mid-gestation', 3 : 'Late gestation', 4 : 'Post-partum'}
+term_labels = {1 : '<= 12 weeks gestation', 2 : '13-20 weeks gestation', 3 : '>= 23 weeks gestation', 4 : 'Post-partum'}

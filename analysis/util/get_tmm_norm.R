@@ -18,7 +18,8 @@ get_save_tmm = function(counts_path, to_save_path, idx_cols_to_remove = c(-1, -2
 #Discovery dataset TMM calculated in 2.0_DE.R
 
 #Validation datasets TMM 
-get_save_tmm('../../../data/rnaseq_validation_data/htseq_postQC.csv', '../../../data/rnaseq_validation_data/TMM_postQC.csv')
+get_save_tmm('../../../data/rnaseq_stanford_all/val/htseq_postQC.csv', '../../../data/rnaseq_stanford_all/val/TMM_postQC.csv')
+get_save_tmm('../../../data/gapps/htseq_postQC.csv', '../../../data/gapps/TMM_postQC.csv')
 get_save_tmm('../../../data/delvecchio_data/htseq_merged.csv', '../../../data/delvecchio_data/TMM.csv')
 
 get_save_tmm('../../../data/munchel_data/S1_counts_only.csv', '../../../data/munchel_data/S1_TMM.csv', c(-1))

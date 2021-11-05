@@ -3,6 +3,8 @@
 import pandas as pd
 import numpy as np
 from copy import deepcopy
+import mygene
+
 
 def read_sample_meta_table(file_path, index_col = 0):
     '''
@@ -19,12 +21,13 @@ class rnaseq_data():
 	Class to easily read and manipulate raw counts data from RNAseq
 	Will import RNAseq data (counts table), normalize using TMM (calculated using EdgeR), and incorporate annotations from mygene_db
 	"""
-	def __init__(self, counts_df_path, tmm_scaling_df_path = None, counts_index_cols = [0,1], mygene_db = None, mL_plasma = 1.0):
+	def __init__(self, counts_df_path, tmm_scaling_df_path = None, is_logCPM_path_R = False, counts_index_cols = [0,1], mygene_db = None, mL_plasma = 1.0):
 		"""
 		Init fxn for rnaseq_data
 		Input:
-			counts_df_path - path to counts table
+			counts_df_path - path to counts table or logCPM with batch corr from R
 			tmm_scaling_df_path - Optional, path to TMM norm csv saved after running TMM in R
+			is_logCPM_path_R = Optional, bool to indicate reading in an R file
 			counts_index_cols - columns that include indices to use. Assumes multiindex of form [gene_name, gene_num] hence [0,1] idx
 			mygene_db - instance of mygene_db to use when getting annotations
 			mL_plasma - mL of plasma cfRNA was extracted from, specific to cfRNA. Default is 1.0 which does not affect normalization.
@@ -42,14 +45,24 @@ class rnaseq_data():
 		self.counts_path = counts_df_path
 		self.tmm_path = tmm_scaling_df_path
 		self.mL_plasma = mL_plasma
+		self.is_logCPM_R = is_logCPM_path_R
 
 		self.tmm = None
 		if self.tmm_path is not None:
 			self.tmm = self._read_tmm_scaling_file()
 		self.counts = self._read_counts_csv(counts_index_cols)
-		self.CPM = self.get_CPM()
-		self.logCPM = self.get_logCPM()
 
+		self.CPM = self.get_CPM()
+
+		if self.is_logCPM_R:
+			self.CPM = None
+			self.logCPM = self.counts.copy()
+			self.split_gene_name_num_indices()
+		else:
+			self.logCPM = self.get_logCPM()
+
+
+		self.has_features = self.counts.sum(axis = 0) > 0
 		self.is_anno = False
 		self.anno = None
 
@@ -95,11 +108,25 @@ class rnaseq_data():
 		'''
 		return self.logCPM.index.get_level_values('gene_name') + '_' + self.logCPM.index.get_level_values('gene_num')
 
+	def split_gene_name_num_indices(self):
+		'''
+		Method to split gene_name_gene_number into 2 index
+		Convenience when reading back from R
+		'''
+
+		for attr in [self.counts, self.logCPM]:
+			split_idx = attr.index.str.split('_ENSG', n = 1, expand = True).rename(['gene_name', 'gene_num_split'])
+			attr['gene_name'] = split_idx.get_level_values('gene_name')
+			attr['gene_num'] = 'ENSG' + split_idx.get_level_values('gene_num_split')
+			attr.reset_index(drop = True, inplace = True)		
+			attr.set_index(['gene_name', 'gene_num'], inplace = True)
+		return
+
 	def _sift_through_gene_anno_query(self, mygeneinfo_query, query_type, verbose = False):
 		'''
 		Private class method to identify gene annotations
 		'''
-		gene_ensgs = pd.DataFrame(columns = ['gene_type'], index = self.logCPM.index)
+		gene_ensgs = pd.DataFrame(columns = ['name', 'gene_type', 'summary', 'GO_BP', 'GO_MF'], index = self.logCPM.index)
 		notfound = []
 
 		for entry in mygeneinfo_query:
@@ -116,7 +143,20 @@ class rnaseq_data():
 					correct_entry_idx = np.where(np.array([entry['query'] == entry['ensembl'][i]['gene'] for i in range(len(entry['ensembl']))]))[0][0]
 				entry['ensembl'] = entry['ensembl'][correct_entry_idx]
 
-			gene_ensgs.loc[gene_ensgs.index.get_level_values(query_type).isin([entry['query']]), :] = entry['ensembl']['type_of_gene']
+			#Other than gene_type other fields may not be available. Check prior to entering. Otherwise leave as nan
+			query_match = gene_ensgs.index.get_level_values(query_type).isin([entry['query']])
+			gene_ensgs.loc[query_match, 'gene_type'] = entry['ensembl']['type_of_gene']
+			if 'name' in entry.keys():
+				gene_ensgs.loc[query_match, 'name'] = entry['name']
+
+			if 'summary' in entry.keys():
+				gene_ensgs.loc[query_match, 'summary'] = entry['summary']
+
+			if 'go' in entry.keys():
+				for GO_term in ['BP', 'MF']:
+					if GO_term in entry['go'].keys():
+						all_terms = ', '.join(list(set([bp_i['term'] for bp_i in entry['go'][GO_term]]))) if isinstance(entry['go'][GO_term], list) else entry['go'][GO_term]['term']
+						gene_ensgs.loc[query_match, 'GO_' + GO_term] = all_terms
 
 		return gene_ensgs, notfound
 
@@ -130,9 +170,10 @@ class rnaseq_data():
 		if 'gene_num' not in self.logCPM.index.names:
 			idx_to_pull = 0
 			scope = ['symbol', 'ensembl.gene']
-		gene_names = self.logCPM.index.get_level_values(idx_to_pull).to_list()
 
-		init_query = gene_db.querymany(gene_names, scopes = scope, species = 'human', fields = 'name,symbol,alias,ensembl.gene,ensembl.type_of_gene',
+		gene_names = self.logCPM.index.get_level_values(idx_to_pull).to_list()
+		fields_to_include = 'name,symbol,alias,ensembl.gene,ensembl.type_of_gene,summary,go.BP.term,go.MF.term'
+		init_query = gene_db.querymany(gene_names, scopes = scope, species = 'human', fields = fields_to_include,
 										returnall = True)['out']
 	
 		gene_ensgs, notfound = self._sift_through_gene_anno_query(init_query, idx_to_pull)
@@ -140,7 +181,7 @@ class rnaseq_data():
 		if idx_to_pull == 'gene_num': #Apparently ENSG IDs can change even within the same build. See TBCE which has both ENSG00000116957 and ENSG00000285053 both for GrCH38
 			new_idx_to_pull = 'gene_name'
 			not_found_names = self.logCPM.loc[self.logCPM.index.get_level_values(idx_to_pull).isin(notfound)].index.get_level_values(new_idx_to_pull)
-			notfound_requery = gene_db.querymany(not_found_names, scopes = ['symbol', 'ensembl.gene', 'alias'], species = 'human', fields = 'name,symbol,alias,ensembl.gene,ensembl.type_of_gene',
+			notfound_requery = gene_db.querymany(not_found_names, scopes = ['symbol', 'ensembl.gene', 'alias'], species = 'human', fields = fields_to_include,
 											returnall = True)['out']
 			newlyfound_ensgs, still_notfound = self._sift_through_gene_anno_query(notfound_requery, new_idx_to_pull)
 			gene_ensgs.loc[newlyfound_ensgs.dropna().index, 'gene_type'] = newlyfound_ensgs.dropna().gene_type
@@ -170,7 +211,8 @@ class rnaseq_data():
 		gene_type_idx = self.anno.loc[self.anno.gene_type.isin(gene_types)].index
 		self.anno = self.anno.loc[gene_type_idx]
 		self.counts = self.counts.loc[gene_type_idx]
-		self.CPM = self.CPM.loc[gene_type_idx]
+		if self.CPM is not None:
+			self.CPM = self.CPM.loc[gene_type_idx]
 		self.logCPM = self.logCPM.loc[gene_type_idx]
 
 		return
@@ -185,7 +227,8 @@ class rnaseq_data():
 			where n_samples_in_mask are all samples in sample_idx
 		'''
 		self.counts = self.counts.loc[:, sample_idx]
-		self.CPM = self.CPM.loc[:, sample_idx]
+		if self.CPM is not None:
+			self.CPM = self.CPM.loc[:, sample_idx]
 		self.logCPM = self.logCPM.loc[:, sample_idx]
 
 		return
@@ -205,7 +248,7 @@ class rnaseq_and_meta_data():
 		"""
 		self.meta = read_sample_meta_table(meta_df_path)
 		self.rnaseq = rnaseq_data(counts_df_path, tmm_scaling_df_path = tmm_scaling_df_path, **kwargs)
-
+		self.meta = self.meta.loc[self.rnaseq.logCPM.columns]
 	def filter_to_gene_types(self, gene_types):
 		"""
 		Method to call corresponding method from rnaseq_data
@@ -229,11 +272,17 @@ class rnaseq_and_meta_data():
 		obj_copy.rnaseq.filter_to_samples(obj_copy.meta.index)
 		return obj_copy
 
-	def join(self, rnaseq_and_meta_data_obj_2):
-		self.meta = pd.concat((self.meta, rnaseq_and_meta_data_obj_2.meta), axis = 0)
-		self.rnaseq.counts = self.rnaseq.counts.join(rnaseq_and_meta_data_obj_2.rnaseq.counts)
-		self.rnaseq.CPM = self.rnaseq.CPM.join(rnaseq_and_meta_data_obj_2.rnaseq.CPM)
-		self.rnaseq.logCPM = self.rnaseq.logCPM.join(rnaseq_and_meta_data_obj_2.rnaseq.logCPM)
+	def join(self, rnaseq_and_meta_data_obj_2, how = 'inner', on = 'gene_name', rescale_rnaseq_2 = False):
+		common_meta_columns = self.meta.columns.intersection(rnaseq_and_meta_data_obj_2.meta.columns)
+		self.meta = pd.concat((self.meta.loc[:, common_meta_columns], rnaseq_and_meta_data_obj_2.meta.loc[:, common_meta_columns]), axis = 0)
+
+		self.rnaseq.counts = self.rnaseq.counts.join(rnaseq_and_meta_data_obj_2.rnaseq.counts, how  = how)
+		if self.rnaseq.CPM is not None and rnaseq_and_meta_data_obj_2.rnaseq.CPM is not None:
+			self.rnaseq.CPM = self.rnaseq.CPM.join(rnaseq_and_meta_data_obj_2.rnaseq.CPM, how = how)
+		self.rnaseq.logCPM = self.rnaseq.logCPM.join(rnaseq_and_meta_data_obj_2.rnaseq.logCPM, how = how)
+
+		
+		
 
 class logFC_data_by_group():
 	"""
@@ -384,7 +433,7 @@ class logFC_data_by_group():
 
 			logFC_sampled.loc[:, sampling_i] = self.get_grp_avgs_logFC(logCPM_df, resampled_meta)['logFC']
 
-			if (sampling_i +1) % 1000 == 0:
+			if (sampling_i + 1) % 1000 == 0:
 				print('%d resampling iterations completed' % (sampling_i + 1))
 
 		delta_star = logFC_sampled.to_numpy() - self.logFC.loc[:, corresponding_group].to_numpy()[:, np.newaxis]
@@ -427,7 +476,7 @@ class logFC_data_by_group():
 			
 		Modified attributes: 
 			CV - Calculated and added
-			CV_mask - Bool mask of same shape as CV, Whether CV <= CV_cutoff
+			CV_mask - Bool mask of same shape as CV, Whether CV < CV_cutoff
 		'''
 		self._check_if_calculated_logFC()
 
@@ -492,4 +541,16 @@ class logFC_data_by_group():
 		print('Identifying when during gestation we observe changes')
 		self._id_stable_logFC()
 
+	def isec_same_sign_lfc(self, logFC_2, colnames):
+		isec_lfc = self.logFC.join(logFC_2, rsuffix = '2')
+		sign_check = np.sign(isec_lfc.loc[:, colnames + [colname + '2' for colname in colnames]]).sum(axis = 1).abs() == len(colnames)*2
+		same_sign_idx = isec_lfc.loc[sign_check].index
 
+		self.logFC = self.logFC.loc[same_sign_idx]
+		self.CV = self.CV.loc[same_sign_idx]
+		self.logFC_CI = self.logFC_CI.loc[same_sign_idx]
+
+		self.mod_CV_mask(self.CV_cutoff)
+		self.mod_logFC_mask(self.logFC_cutoff)
+
+		return
