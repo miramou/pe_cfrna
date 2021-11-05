@@ -43,12 +43,7 @@ if (sum(as.character(meta$sample) == as.character(colnames(all_filt$counts))) !=
 #Factorize
 meta$subject = factor(meta$subject)
 meta$case = factor(meta$case)
-meta$is_obese = factor(meta$is_obese)
-meta$batch = factor(meta$batch)
-meta$race = factor(meta$race)
-meta$ethnicity = factor(meta$ethnicity)
 meta$is_pp = factor(meta$is_pp)
-meta$pe_feature = factor(meta$pe_feature)
 str(meta)
   
 #Make time cubic spline [Samples collected across a range]
@@ -57,14 +52,21 @@ time_spline = ns(meta$time_to_pe_onset, df=4)
 #Include sample quality to reduce weight of outlier samples
 #Based on manuscript - using this fxn alone performs comparably to:
 fits = c()
+fits_no_bayes = c()
 designs = c()
+batch_removal = c()
+
+for (i in c(1,2,3,4)) {
   
-for (i in c(1,2)) {
-  
-  #Design matrix
-  design = model.matrix(~case*time_spline+case*is_pp+race+ethnicity+fetal_sex+bmi_grp+batch, data = meta)
+  #Design matrix w PE with or without severe features
+  design = model.matrix(~pe_feature*time_spline+pe_feature*is_pp+race+ethnicity+fetal_sex+bmi_grp+mom_age+batch, data = meta)
   #Run again to remove batch as a var
-  if (i == 2) {design = model.matrix(~case*time_spline+case*is_pp+race+ethnicity+fetal_sex+bmi_grp, data = meta)}
+  if (i == 2) {design = model.matrix(~pe_feature*time_spline+pe_feature*is_pp+race+ethnicity+fetal_sex+bmi_grp+mom_age, data = meta)}
+  
+  #Design matrix with PE as syndrome
+  if (i == 3) {design = model.matrix(~case*time_spline+case*is_pp+race+ethnicity+fetal_sex+bmi_grp+batch, data = meta)}
+  #Run again to remove batch as a var
+  if (i == 4) {design = model.matrix(~case*time_spline+case*is_pp+race+ethnicity+fetal_sex+bmi_grp, data = meta)}
   
   str(design)
   colnames(design) = make.names(colnames(design))
@@ -100,41 +102,56 @@ for (i in c(1,2)) {
     plot = TRUE
   )
   
-  if (i == 1) {
+  if (i %in% c(1,3)) {
     fit = lmFit(all_voom_2,
                 design,
                 block = meta$subject,
                 correlation = corfit$consensus
                 )
     
+    fits_no_bayes[[i]] = fit
     #With regression - look at main effect + interaction params from spline
     fits[[i]] = eBayes(fit, trend = TRUE, robust = TRUE)
   }
-  if (i == 2) {
+  if (i %in% c(2,4)) {
     no_batch = removeBatchEffect(all_voom_2, batch = meta$batch, design = design, 
                                  block = meta$subject, correlation = corfit$consensus)
+    batch_removal[[i]] = no_batch
   }
 }
   
 #ID changes
 cutoff = Inf #Will filter in 2.1 Script for alpha but would like to export all
-cutoff_to_check = 0.05
+
+#Test for general changes related to PE (mild or severe)
+dTime_PE_mild_GA_PP_w_covar = topTable(fits[[1]], coef=c(2,20,22,24,26), sort.by="B", resort.by = "logFC", p.value = cutoff, number = Inf, confint = TRUE)
+dTime_PE_severe_GA_PP_w_covar = topTable(fits[[1]], coef=c(3,21,23,25,27), sort.by="B", resort.by = "logFC", p.value = cutoff, number = Inf, confint = TRUE)
+
+#Test for gen dif between severe and mild
+sev_v_mild_cont = makeContrasts(
+  pe_featuresevere - pe_featuremild,
+  pe_featuresevere.time_spline1 - pe_featuremild.time_spline1,
+  pe_featuresevere.time_spline2 - pe_featuremild.time_spline2,
+  pe_featuresevere.time_spline3 - pe_featuremild.time_spline3,
+  pe_featuresevere.time_spline4 - pe_featuremild.time_spline4,
+  levels = designs[[1]]
+)
+
+fit_mild_v_sev = contrasts.fit(fits_no_bayes[[1]], sev_v_mild_cont)
+fit_mild_v_sev = eBayes(fit_mild_v_sev)
+dTime_sev_v_mild = topTable(fit_mild_v_sev, sort.by="B", resort.by = "logFC", p.value = cutoff, number = Inf, confint = TRUE)
 
 #PE changes over gestation
-dTime_PE_onlyGA_w_covar = topTable(fits[[1]], coef=c(2,18:21), sort.by="B", resort.by = "logFC", p.value = cutoff, number = Inf, confint = TRUE)
-n_changes_overGA = dim(topTable(fits[[1]], coef=c(2,18:21), sort.by="B", resort.by = "logFC", p.value = cutoff_to_check, number = Inf, confint = TRUE))[1]
+dTime_PE_onlyGA_w_covar = topTable(fits[[3]], coef=c(2,18:21), sort.by="B", resort.by = "logFC", p.value = cutoff, number = Inf, confint = TRUE)
 
-#PE changes PP
-dTime_PE_PP_w_covar = topTable(fits[[1]], coef=c(2,22), sort.by="B", resort.by = "logFC", p.value = cutoff, number = Inf, confint = TRUE)
-n_changes_PP = dim(topTable(fits[[1]], coef=c(2,22), sort.by="B", resort.by = "logFC", p.value = cutoff_to_check, number = Inf, confint = TRUE))[1]
+out_prefix = 'out/de/w_mild_severe/'
+out_prefix1 = 'out/de/'
 
-out_prefix = 'out/de/'
-write.csv(no_batch, paste0(path_prefix, "logCPM_postQC_RemovedBatch.csv"))
+write.csv(batch_removal[[2]], paste0(path_prefix, "w_mild_severe/", "logCPM_postQC_RemovedBatch.csv"))
+write.csv(batch_removal[[4]], paste0(path_prefix, "logCPM_postQC_RemovedBatch.csv"))
 
-if (n_changes_overGA > 0) {
-  write.csv(dTime_PE_onlyGA_w_covar, paste0(out_prefix, "DE_PEspecific_onlyGA_changes_timeToPE_w_covar_bmi_fsex_w_batch.csv"))
-}
+write.csv(dTime_PE_mild_GA_PP_w_covar, paste0(out_prefix, "DE_PEspecific_GA_PP_mild_changes_timeToPE_w_covar_bmi_fsex_w_batch.csv"))
+write.csv(dTime_PE_severe_GA_PP_w_covar, paste0(out_prefix, "DE_PEspecific_GA_PP_severe_changes_timeToPE_w_covar_bmi_fsex_w_batch.csv"))
+write.csv(dTime_sev_v_mild, paste0(out_prefix, 'DE_PEspecific_GA_PP_sev_v_mild_changes_timeToPE_w_covar_bmi_fsex_w_batch.csv'))
 
-if (n_changes_PP > 0) {
-  write.csv(dTime_PE_PP_w_covar, paste0(out_prefix, "DE_PEspecific_PP_changes_timeToPE_w_covar_bmi_fsex_w_batch.csv"))
-}
+write.csv(dTime_PE_onlyGA_w_covar, paste0(out_prefix1, "DE_PEspecific_onlyGA_changes_timeToPE_w_covar_bmi_fsex_w_batch.csv"))
