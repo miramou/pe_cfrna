@@ -23,4 +23,4 @@ Repository to reproduce analyses from manuscript titled "Early prediction of pre
 
 # To run code
 
-* To run any notebook starting with a number greater than 0, you will need counts table version 2. The notebook will load any required utilities. 
+* To run any notebook starting with a number greater than 0, you will need counts table version b. The notebook will load any required utilities. 
