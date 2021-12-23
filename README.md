@@ -16,11 +16,11 @@ Repository to reproduce analyses from manuscript titled "Early prediction of pre
 
 * Counts table data can be found under GEO X 
 	* There are two versions of counts table:
-		(A) Raw counts table includes all possible annotations based on gtf file
-		(B) Post QC counts table includes genes that passed filtering (see Methods, "Gene filtering")
+		1. Raw counts table includes all possible annotations based on gtf file
+		2. Post QC counts table includes genes that passed filtering (see Methods, "Gene filtering")
 * Raw data can be found under SRA Y
 * Metadata can be found under SRA Y
 
 # To run code
 
-* To run any notebook starting with a number greater than 0, you will need counts table version B. The notebook will load any required utilities. 
+* To run any notebook starting with a number greater than 0, you will need counts table version 2. The notebook will load any required utilities. 
