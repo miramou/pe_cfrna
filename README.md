@@ -20,7 +20,9 @@ Repository to reproduce analyses from manuscript titled "Early prediction of pre
 		2. Post QC counts table includes genes that passed filtering (see Methods, "Gene filtering")
 * Raw data can be found under SRA SRP352519
 * BioProject metadata can be found under BioProject PRJNA792450
+* To download the metadata - go to the SRA run selector (https://www.ncbi.nlm.nih.gov/Traces/study/) and search SRP352519. Click download metadata
 
 # To run code
 
-* To run any notebook starting with a number greater than 0, you will need counts table version b. The notebook will load any required utilities. 
+* To run any notebook starting with a number greater than 0, you will need counts table version b. The notebook will load any required utilities.
+  
